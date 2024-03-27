@@ -81,7 +81,7 @@ def model_and_tokenizer(request):
 @pytest.mark.parametrize("DQ", [True, False], ids=['DQ_True', 'DQ_False'])
 @pytest.mark.parametrize("inference_kernel", [True, False], ids=['inference_kernel_True', 'inference_kernel_False'])
 #@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32], ids=['fp16', 'bf16', 'fp32'])
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 def test_pi(requires_cuda, model_and_tokenizer, inference_kernel, DQ):
     print('')
     dtype = torch.float16

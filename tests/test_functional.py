@@ -584,7 +584,7 @@ dim3 = torch.randint(32, 256, size=(n,)).tolist()
 values = list(product(dim1, dim2, dim3))
 names = ["dim1_{}_dim2_{}_dim3_{}".format(*vals) for vals in values]
 
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 @pytest.mark.parametrize("dim1, dim2, dim3", values, ids=names)
 def test_vector_quant(dim1, dim2, dim3):
     dim2 = dim2 - (dim2 % 16)
@@ -1122,7 +1122,7 @@ inner = torch.randint(1, 4 * 1024, size=(n,)).tolist()
 values = list(zip(dim1, dim4, inner))
 names = ["dim1_{}_dim4_{}_inner_{}".format(*vals) for vals in values]
 
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 @pytest.mark.parametrize("dim1, dim4, inner", values, ids=names)
 def test_integrated_igemmlt(dim1, dim4, inner):
     for i in range(k):
@@ -1359,7 +1359,7 @@ names = [
     for vals in values
 ]
 
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 def test_overflow():
     formatB = F.get_special_format_str()
     print(formatB)
@@ -2245,7 +2245,7 @@ def test_bench_dequantization():
 
 
 
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16], ids=["fp32", "fp16", "bf16"])
 def test_fp4_quant(dtype):
     vals = list(product([0, 1], repeat=4))
@@ -2375,7 +2375,7 @@ def test_normal_map_tree():
 @pytest.mark.parametrize("kind", ['fc1', 'fc2', 'attn', 'attn_packed'], ids=['fc1', 'fc2', 'attn', 'attn_packed'])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32], ids=['fp16', 'bf16', 'fp32'])
 @pytest.mark.parametrize("quant_storage", [torch.uint8, torch.float16, torch.bfloat16, torch.float32], ids=['uint8', 'fp16', 'bf16', 'fp32'])
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="gemv 4bit tests are partially enabled on MI300, others being fixed for warpsize 64")
+#@pytest.mark.skipif(HIP_ENVIRONMENT, reason="gemv 4bit tests are partially enabled on MI300, others being fixed for warpsize 64")
 def test_gemv_4bit(dtype, storage_type, quant_storage, double_quant, kind):
     for dim in [128, 256, 512, 1024]:
     #for dim in [4*1024]:
