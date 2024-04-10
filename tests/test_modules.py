@@ -1,11 +1,13 @@
-from itertools import product
+import math
 
+import einops
 import pytest
 import torch
 from torch import nn
 
 import bitsandbytes as bnb
-from bitsandbytes.cextension import HIP_ENVIRONMENT
+from tests.helpers import id_formatter
+
 
 class MockArgs:
     def __init__(self, initial_data):
@@ -40,11 +42,11 @@ def get_args():
 
 
 def assert_all_approx_close(a, b, atol=1e-8, rtol=1e-5, count=10):
-    idx = torch.isclose(a, b, rtol, atol)
+    idx = torch.isclose(a, b, rtol=rtol, atol=atol)
     sumval = (idx == 0).sum().item()
     if sumval > count:
         print(f"Too many values not close: assert {sumval} < {count}")
-        torch.testing.assert_close(a, b, rtol, atol)
+        torch.testing.assert_close(a, b, rtol=rtol, atol=atol)
 
 
 class LinearFunction(torch.autograd.Function):
@@ -310,13 +312,7 @@ class Linear8bit(nn.Module):
         return LinearFunction.apply(x, self.weight, self.bias, self.args)
 
 
-threshold = [0.0, 3.0]
-values = threshold
-names = [f"threshold_{vals}" for vals in values]
-
-
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
-@pytest.mark.parametrize("threshold", values, ids=names)
+@pytest.mark.parametrize("threshold", [0.0, 3.0], ids=id_formatter("threshold"))
 def test_linear8bitlt_inference(threshold):
     l1 = bnb.nn.Linear8bitLt(32, 64, threshold=threshold).cuda().half()
     assert l1.weight.device.type == "cuda"
@@ -330,7 +326,6 @@ def test_linear8bitlt_inference(threshold):
             assert l1.state.CxB is not None
 
 
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 def test_linear8bitlt_accumulated_gradient():
     l1 = torch.nn.Sequential(*[bnb.nn.Linear8bitLt(32, 32).cuda().half() for i in range(2)])
     l2 = torch.nn.Sequential(*[torch.nn.Linear(32, 32).cuda().half() for i in range(2)])
@@ -488,7 +483,14 @@ def test_linear8bitlt_no_fp16_weights(threshold, memory_efficient_backward):
         assert (idx == 0).sum().item() <= b1.numel() * 0.005
 
 
-@pytest.mark.parametrize("module", [lambda nin, nout, bias=True: bnb.nn.Linear8bitLt(nin, nout, bias=bias, has_fp16_weights=False), bnb.nn.LinearFP4], ids=['Int8Lt', 'FP4'])
+@pytest.mark.parametrize(
+    "module",
+    [
+        lambda n_in, n_out, bias=True: bnb.nn.Linear8bitLt(n_in, n_out, bias=bias, has_fp16_weights=False),
+        bnb.nn.LinearFP4,
+    ],
+    ids=['Int8Lt', 'FP4'],
+)
 def test_linear_kbit_fp32_bias(module):
     # casts model to fp16 -> int8 automatically
     l1 = module(32, 64).cuda()
@@ -511,19 +513,21 @@ def test_linear_kbit_fp32_bias(module):
         o1 = l1(b1)
         assert l1.bias is None
 
-modules = []
-modules.append(bnb.nn.Linear8bitLt)
-modules.append(bnb.nn.Linear4bit)
-modules.append(bnb.nn.LinearFP4)
-modules.append(bnb.nn.LinearNF4)
-modules.append(lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compress_statistics=True))
-modules.append(lambda d1, d2: bnb.nn.LinearNF4(d1, d2, compress_statistics=True))
-modules.append(lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.float32))
-modules.append(lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.float16))
-modules.append(lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.bfloat16))
-names = ['Int8Lt', '4bit', 'FP4', 'NF4', 'FP4+C', 'NF4+C', 'NF4+fp32', 'NF4+fp16', 'NF4+bf16']
-@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
-@pytest.mark.parametrize("module", modules, ids=names)
+
+module_dict = {
+    "Int8Lt": bnb.nn.Linear8bitLt,
+    "4bit": bnb.nn.Linear4bit,
+    "FP4": bnb.nn.LinearFP4,
+    "NF4": bnb.nn.LinearNF4,
+    "FP4+C": lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compress_statistics=True),
+    "NF4+C": lambda d1, d2: bnb.nn.LinearNF4(d1, d2, compress_statistics=True),
+    "NF4+fp32": lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.float32),
+    "NF4+fp16": lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.float16),
+    "NF4+bf16": lambda d1, d2: bnb.nn.LinearFP4(d1, d2, compute_dtype=torch.bfloat16),
+}
+
+
+@pytest.mark.parametrize("module", module_dict.values(), ids=module_dict.keys())
 def test_kbit_backprop(module):
     b = 17
     dim1 = 37
@@ -640,6 +644,3 @@ def test_4bit_warnings():
         net(inp)
 
     assert len(record) == 2
-
-
-

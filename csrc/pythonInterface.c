@@ -7,7 +7,7 @@
 #include <ops.cuh>
 #endif
 #if BUILD_HIP
-#include <ops.hiph>
+#include <ops.hip.h>
 #endif
 #include <cpu_ops.h>
 
@@ -265,7 +265,6 @@ void spmm_coo_very_sparse_naive_fp16(int *max_count, int *max_idx, int *offset_r
 
 void spmm_coo_very_sparse_naive_int8(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float *dequant_stats, int nnz_rows, int nnz, int rowsA, int rowsB, int colsB)
 { spmm_coo_very_sparse_naive<signed char, 8>(max_count, max_idx, offset_rowidx, rowidx, colidx, values, B, out, dequant_stats, nnz_rows, nnz, rowsA, rowsB, colsB); }
-
 #endif
 
 extern "C"
@@ -319,9 +318,9 @@ extern "C"
 
 	MAKE_CFUNC32(adam, float, fp32)
 	MAKE_CFUNC32(adam, half, fp16)
-	#if defined(BUILD_CUDA)
+#if defined(BUILD_CUDA)
 	MAKE_CFUNC32(adam, __nv_bfloat16, bf16)
-	#elif defined(BUILD_HIP)
+#elif defined(BUILD_HIP)
 	MAKE_CFUNC32(adam, hip_bfloat16, bf16)
 	#endif
 	MAKE_CFUNC32(momentum, float, 32)
@@ -330,9 +329,9 @@ extern "C"
 	MAKE_CFUNC32(rmsprop, half, 16)
 	MAKE_CFUNC32(lion, float, fp32)
 	MAKE_CFUNC32(lion, half, fp16)
-	#if defined(BUILD_CUDA)
+#if defined(BUILD_CUDA)
 	MAKE_CFUNC32(lion, __nv_bfloat16, bf16)
-	#elif defined(BUILD_HIP)
+#elif defined(BUILD_HIP)
 	MAKE_CFUNC32(lion, hip_bfloat16, bf16)
 	#endif
 	MAKE_CFUNC32(adagrad, float, 32)
@@ -374,16 +373,16 @@ extern "C"
 	MAKE_CBLOCKWISE8(rmsprop, RMSPROP, float, fp32)
 	MAKE_CBLOCKWISE8(adagrad, ADAGRAD, half, fp16)
 	MAKE_CBLOCKWISE8(adagrad, ADAGRAD, float, fp32)
-	#if defined(BUILD_CUDA)
+#if defined(BUILD_CUDA)
 	MAKE_CBLOCKWISE8(adam, ADAM, __nv_bfloat16, bf16)
-	#elif defined(BUILD_HIP)
+#elif defined(BUILD_HIP)
 	MAKE_CBLOCKWISE8(adam, ADAM, hip_bfloat16, bf16)
 	#endif
 	MAKE_CBLOCKWISE8(lion, LION, half, fp16)
 	MAKE_CBLOCKWISE8(lion, LION, float, fp32)
-	#if defined(BUILD_CUDA)
+#if defined(BUILD_CUDA)
 	MAKE_CBLOCKWISE8(lion, LION, __nv_bfloat16, bf16)
-	#elif defined(BUILD_HIP)
+#elif defined(BUILD_HIP)
 	MAKE_CBLOCKWISE8(lion, LION, hip_bfloat16, bf16)
 	#endif
 
@@ -434,7 +433,7 @@ extern "C"
 	{ \
 		transform_##fbits##_##fsrc##_to_##ftrgt##_##ftranspose((cublasLtHandle_t) context->m_handle, A, out, dim1, dim2); \
 	} \
-	
+
 #endif
 
 #if BUILD_HIP
@@ -477,7 +476,7 @@ extern "C"
 	MAKE_FUNC_CTRANSFORM(8, col32, row, n, int8_t, COL32, ROW, false, 8)
 	MAKE_FUNC_CTRANSFORM(32, col32, row, n, int32_t, COL32, ROW, false, 32)
 
-	#if defined(BUILD_HIP)
+#if defined(BUILD_HIP)
 	MAKE_FUNC_CTRANSFORM(8, row, col, t, int8_t, ROW, COL, true, 8)
 	MAKE_FUNC_CTRANSFORM(32, row, col, n, int32_t, ROW, COL, false, 32)
 	MAKE_FUNC_CTRANSFORM(32, row, col, t, int32_t, ROW, COL, true, 32)
@@ -555,7 +554,7 @@ extern "C"
 		int hasPrefetch = 0;
 		CUDA_CHECK_RETURN(cudaDeviceGetAttribute(&hasPrefetch, cudaDevAttrConcurrentManagedAccess, device)); // 40ns overhead
 		if (hasPrefetch == 0) return;
- 
+
 		CUDA_CHECK_RETURN(cudaMemPrefetchAsync(ptr, bytes, device, 0));
 		CUDA_CHECK_RETURN(cudaPeekAtLastError());
 	}
@@ -594,9 +593,9 @@ extern "C"
 	void cgemm_4bit_inference_naive_fp16(int m, int n, int k, half * A,  unsigned char* B,  float *absmax, float *datatype, half * out,  int lda, int ldb, int ldc, int blocksize)
 	{ gemm_4bit_inference_naive_fp16(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize); }
 
-	#if defined(BUILD_CUDA)
+#if defined(BUILD_CUDA)
 	void cgemm_4bit_inference_naive_bf16(int m, int n, int k, __nv_bfloat16 * A,  unsigned char* B,  float *absmax, float *datatype, __nv_bfloat16 * out,  int lda, int ldb, int ldc, int blocksize)
-	#elif defined(BUILD_HIP)
+#elif defined(BUILD_HIP)
 	void cgemm_4bit_inference_naive_bf16(int m, int n, int k, hip_bfloat16 * A,  unsigned char* B,  float *absmax, float *datatype, hip_bfloat16 * out,  int lda, int ldb, int ldc, int blocksize)
 	#endif
 	{ gemm_4bit_inference_naive_bf16(m, n, k, A, B, absmax,  datatype, out, lda, ldb, ldc, blocksize); }

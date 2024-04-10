@@ -1,8 +1,8 @@
-import operator
-import warnings
 from dataclasses import dataclass
 from functools import reduce  # Required in Python 3
-from typing import Tuple, Optional, List
+import operator
+from typing import Optional, Tuple
+import warnings
 from warnings import warn
 
 import torch
@@ -13,9 +13,6 @@ import bitsandbytes.functional as F
 # math.prod not compatible with python < 3.8
 def prod(iterable):
     return reduce(operator.mul, iterable, 1)
-
-tensor = torch.Tensor
-
 
 # The inverse transformation for the colTuring and colAmpere format were contributed by Alex Borzunov:
 # https://github.com/bigscience-workshop/petals/blob/main/src/petals/utils/linear8bitlt_patch.py
@@ -498,7 +495,7 @@ class MatMul4Bit(torch.autograd.Function):
     # backward is mostly the same, but adds one extra clause (see "elif state.CxB is not None")
 
     @staticmethod
-    def forward(ctx, A, B, out=None, bias=None, quant_state: F.QuantState = None):
+    def forward(ctx, A, B, out=None, bias=None, quant_state: Optional[F.QuantState] = None):
         # default of pytorch behavior if inputs are empty
         ctx.is_empty = False
         if prod(A.shape) == 0:
@@ -551,10 +548,10 @@ class MatMul4Bit(torch.autograd.Function):
 
 
 def matmul(
-    A: tensor,
-    B: tensor,
-    out: tensor = None,
-    state: MatmulLtState = None,
+    A: torch.Tensor,
+    B: torch.Tensor,
+    out: Optional[torch.Tensor] = None,
+    state: Optional[MatmulLtState] = None,
     threshold=0.0,
     bias=None
 ):
@@ -564,7 +561,7 @@ def matmul(
     return MatMul8bitLt.apply(A, B, out, bias, state)
 
 
-def matmul_4bit(A: tensor, B: tensor, quant_state: F.QuantState, out: tensor = None, bias=None):
+def matmul_4bit(A: torch.Tensor, B: torch.Tensor, quant_state: F.QuantState, out: Optional[torch.Tensor] = None, bias=None):
     assert quant_state is not None
     if A.numel() == A.shape[-1] and A.requires_grad == False:
         if A.shape[-1] % quant_state.blocksize != 0:

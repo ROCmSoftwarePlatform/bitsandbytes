@@ -1,12 +1,9 @@
 import ctypes as ct
-import os
-import torch
-
-from pathlib import Path
 from warnings import warn
 
-from bitsandbytes.cuda_setup.main import CUDASetup
+import torch
 
+from bitsandbytes.cuda_setup.main import CUDASetup
 
 setup = CUDASetup.get_instance()
 if setup.initialized != True:
@@ -14,7 +11,7 @@ if setup.initialized != True:
 
 lib = setup.lib
 try:
-    if lib is None and torch.cuda.is_available() :
+    if lib is None and torch.cuda.is_available():
         CUDASetup.get_instance().generate_instructions()
         CUDASetup.get_instance().print_log_stack()
         raise RuntimeError('''
@@ -25,7 +22,6 @@ try:
         Inspect the output of the command and see if you can locate CUDA libraries. You might need to add them
         to your LD_LIBRARY_PATH. If you suspect a bug, please take the information from python -m bitsandbytes
         and open an issue at: https://github.com/TimDettmers/bitsandbytes/issues''')
-
     lib.cadam32bit_grad_fp32 # runs on an error if the library could not be found -> COMPILED_WITH_CUDA=False
     lib.get_context.restype = ct.c_void_p
     

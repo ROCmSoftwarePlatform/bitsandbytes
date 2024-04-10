@@ -1,21 +1,24 @@
+#include "hip/hip_runtime.h"
 // Copyright (c) Facebook, Inc. and its affiliates.
 //
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
-#include <kernels.cuh>
-#include <cub/block/block_radix_sort.cuh>
-#include <cub/warp/warp_reduce.cuh>
-#include <cub/block/block_load.cuh>
-#include <cub/block/block_discontinuity.cuh>
-#include <cub/block/block_store.cuh>
-#include <cub/block/block_reduce.cuh>
-#include <cub/cub.cuh>
-#include <math_constants.h>
+#include "kernels.hip.h"
+#include <hipcub/block/block_radix_sort.hpp>
+#include <hipcub/warp/warp_reduce.hpp>
+#include <hipcub/block/block_load.hpp>
+#include <hipcub/block/block_discontinuity.hpp>
+#include <hipcub/block/block_store.hpp>
+#include <hipcub/block/block_reduce.hpp>
+#include <hipcub/hipcub.hpp>
+#include <hip/hip_math_constants.h>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
-#include <mma.h>
+#define __syncwarp __syncthreads //TODO: HIP doesn't have this so just sync threads
 
+//#include <mma.h>
+#include <rocwmma.hpp>
 
 #define HLF_MAX 65504
 #define TH 1024
@@ -24,29 +27,7 @@
 
 
 // source: https://stackoverflow.com/questions/17399119/how-do-i-use-atomicmax-on-floating-point-values-in-cuda
-__device__ float atomicMax(float* address, float val) {
-  int* address_as_i = reinterpret_cast<int*>(address);
-  int old = *address_as_i, assumed;
-  do {
-    assumed = old;
-    old = atomicCAS(
-        reinterpret_cast<int*>(address), assumed,
-        __float_as_int(fmaxf(val, __int_as_float(assumed))));
-  } while (assumed != old);
-  return __int_as_float(old);
-}
-
-__device__ float atomicMin(float* address, float val) {
-  int* address_as_i = reinterpret_cast<int*>(address);
-  int old = *address_as_i, assumed;
-  do {
-    assumed = old;
-    old = atomicCAS(
-        reinterpret_cast<int*>(address), assumed,
-        __float_as_int(fminf(val, __int_as_float(assumed))));
-  } while (assumed != old);
-  return __int_as_float(old);
-}
+// Luckily we have atomicmax and atomicmin in ROCm 
 
 __device__ float dDequantizeFP4(unsigned char val, float absmax)
 {
@@ -134,10 +115,10 @@ __device__ unsigned char dQuantizeFP4(float x)
 
   // we do a binary search
   // the pivots are divided by 12 (the FP4 absmax)
-  // since we assume input data is in [-1.0, 1.0]
+  // since we assum input data is in [-1.0, 1.0]
 
   // !be careful here, its easy to make a mistake
-  // that is difficult to notice if you add an extra
+  // that is difficult to noice if you add an extra
   // zero somewhere!
 
   int sign = x < 0 ? 0b1000 : 0b0000;
@@ -524,9 +505,9 @@ __global__ void kHistogramScatterAdd2D(float* histogram, int *index1, int *index
 template<typename T, int BLOCK_SIZE, int NUM_MAX>
 __global__ void kCompressMax(T * __restrict__ const A, T* out, unsigned char* out_idx, const int n)
 {
-  typedef cub::WarpReduce<T> WarpReduce;
+  typedef hipcub::WarpReduce<T, 32> WarpReduce;
   __shared__ typename WarpReduce::TempStorage temp_storage;
-  typedef cub::BlockLoad<T, BLOCK_SIZE/8 , 8, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+  typedef hipcub::BlockLoad<T, BLOCK_SIZE/8 , 8, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
   __shared__ typename LoadT::TempStorage loadt;
 
   const int warp_idx = threadIdx.x/32;
@@ -574,8 +555,8 @@ __global__ void kCompressMax(T * __restrict__ const A, T* out, unsigned char* ou
   for(int i = 0; i < 8; i++)
   {
     // 3. do warp reduction + broadcast back
-    warp_max = WarpReduce(temp_storage).Reduce(max1, cub::Max());
-    warp_max = cub::ShuffleIndex<32>(warp_max, 0, 0xffffffff);
+    warp_max = WarpReduce(temp_storage).Reduce(max1, hipcub::Max());
+    warp_max = hipcub::ShuffleIndex<32>(warp_max, 0, 0xffffffff);
 
     // 4. Up-shift maxed value, write index into shared memory, replace with 2nd largest
     if(warp_max == max1)
@@ -589,7 +570,7 @@ __global__ void kCompressMax(T * __restrict__ const A, T* out, unsigned char* ou
 
       max2 = -64000.0f;
     }
-    __syncwarp();
+    //__syncwarp();
   }
 
   if(threadIdx.x % 32 < 8)
@@ -616,8 +597,8 @@ __global__ void kEstimateQuantiles(T *__restrict__ const A, float *code, const f
 
   T vals[NUM_ESTIMATE];
 
-  typedef cub::BlockRadixSort<T, THREADS_ESTIMATE, NUM_ESTIMATE, cub::NullType, 4, true, cub::BLOCK_SCAN_RAKING> BlockRadixSort;
-  typedef cub::BlockLoad<T, THREADS_ESTIMATE, NUM_ESTIMATE, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockRadixSort<T, THREADS_ESTIMATE, NUM_ESTIMATE, hipcub::NullType, 4, true, hipcub::BLOCK_SCAN_RAKING> BlockRadixSort;
+  typedef hipcub::BlockLoad<T, THREADS_ESTIMATE, NUM_ESTIMATE, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
 
   __shared__ union {
       typename LoadFloat::TempStorage loadf;
@@ -685,8 +666,8 @@ __global__ void kQuantize(float * code, float * __restrict__ const A, unsigned c
   unsigned char qvals[NUM];
   //const int lane_id = threadIdx.x % 2;
 
-  typedef cub::BlockLoad<float, TH, NUM, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
-  typedef cub::BlockStore<unsigned char, TH, NUM, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+  typedef hipcub::BlockLoad<float, TH, NUM, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockStore<unsigned char, TH, NUM, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
 
   __shared__ typename LoadFloat::TempStorage loadf;
   __shared__ typename StoreChar::TempStorage storec;
@@ -736,10 +717,10 @@ __global__ void kQuantizeBlockwise(float * code, T * __restrict__ const A, float
   float local_abs_max = 0.0f;
   int local_rand_idx = 0;
 
-  typedef cub::BlockLoad<T, BLOCK_SIZE/NUM_PER_TH, NUM_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-  typedef cub::BlockStore<unsigned char, BLOCK_SIZE/NUM_PER_TH, (DATA_TYPE > 0) ? NUM_PER_TH/2 : NUM_PER_TH, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
-  typedef cub::BlockReduce<float, BLOCK_SIZE/NUM_PER_TH> BlockReduce;
-  typedef cub::BlockLoad<float, BLOCK_SIZE/NUM_PER_TH, NUM_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockLoad<T, BLOCK_SIZE/NUM_PER_TH, NUM_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+  typedef hipcub::BlockStore<unsigned char, BLOCK_SIZE/NUM_PER_TH, (DATA_TYPE > 0) ? NUM_PER_TH/2 : NUM_PER_TH, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+  typedef hipcub::BlockReduce<float, BLOCK_SIZE/NUM_PER_TH> BlockReduce;
+  typedef hipcub::BlockLoad<float, BLOCK_SIZE/NUM_PER_TH, NUM_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
 
   __shared__ typename LoadT::TempStorage loadt;
   __shared__ typename LoadFloat::TempStorage loadf;
@@ -768,7 +749,7 @@ __global__ void kQuantizeBlockwise(float * code, T * __restrict__ const A, float
     for(int j = 0; j < NUM_PER_TH; j++)
        local_abs_max = fmaxf(local_abs_max, fabsf((float)vals[j]));
 
-    local_abs_max = BlockReduce(reduce).Reduce(local_abs_max, cub::Max(), valid_items);
+    local_abs_max = BlockReduce(reduce).Reduce(local_abs_max, hipcub::Max(), valid_items);
 
     if(threadIdx.x == 0)
       smem_absmax_value[0] = local_abs_max;
@@ -780,7 +761,7 @@ __global__ void kQuantizeBlockwise(float * code, T * __restrict__ const A, float
     else
       local_abs_max = smem_absmax_value[0];
 
-    __syncwarp();
+    //__syncwarp();
 
     local_abs_max = 1.0f/local_abs_max;
 
@@ -841,8 +822,8 @@ __global__ void kDequantizeBlockwise(float *code, unsigned char * A, float * abs
   unsigned char qvals[NUM_PER_TH];
   float local_abs_max = -FLT_MAX;
 
-  typedef cub::BlockLoad<unsigned char, THREADS, NUM_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
-  typedef cub::BlockStore<T, THREADS, NUM_PER_TH*((DATA_TYPE > 0) ? 2 : 1), cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
+  typedef hipcub::BlockLoad<unsigned char, THREADS, NUM_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
+  typedef hipcub::BlockStore<T, THREADS, NUM_PER_TH*((DATA_TYPE > 0) ? 2 : 1), hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
   __shared__ typename LoadChar::TempStorage loadchar;
   __shared__ typename StoreT::TempStorage storet;
@@ -936,9 +917,9 @@ __global__ void kPreconditionOptimizer32bit2State(T* g, T* p,
   const float correction1 = 1.0f/(1.0f - powf(beta1, step));
   const float correction2 = 1.0f/(1.0f - powf(beta2, step));
 
-  typedef cub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, cub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
-  typedef cub::BlockLoad<float, BLOCK_SIZE/NUM_VALS, NUM_VALS, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
-  typedef cub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
+  typedef hipcub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
+  typedef hipcub::BlockLoad<float, BLOCK_SIZE/NUM_VALS, NUM_VALS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
 
   __shared__ union {
       typename Load::TempStorage load;
@@ -987,7 +968,7 @@ __global__ void kPreconditionOptimizer32bit2State(T* g, T* p,
       if(threadIdx.x == 0)
         atomicAdd(&unorm[0], s1_vals[0]);
 
-      __syncwarp();
+      //__syncwarp();
   }
 }
 
@@ -1025,11 +1006,11 @@ __global__ void kOptimizer32bit2State(T* g, T* p,
   }
   else{ update_scale = 1.0f; }
 
-  typedef cub::BlockLoad<T, TH, NUM_PER_THREAD, cub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
-  typedef cub::BlockStore<T, TH, NUM_PER_THREAD, cub::BLOCK_STORE_WARP_TRANSPOSE> Store;
+  typedef hipcub::BlockLoad<T, TH, NUM_PER_THREAD, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
+  typedef hipcub::BlockStore<T, TH, NUM_PER_THREAD, hipcub::BLOCK_STORE_WARP_TRANSPOSE> Store;
 
-  typedef cub::BlockLoad<float, TH, NUM_PER_THREAD, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
-  typedef cub::BlockStore<float, TH, NUM_PER_THREAD, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreFloat;
+  typedef hipcub::BlockLoad<float, TH, NUM_PER_THREAD, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockStore<float, TH, NUM_PER_THREAD, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreFloat;
 
   __shared__ union {
       typename Load::TempStorage load;
@@ -1099,9 +1080,9 @@ __global__ void kPreconditionOptimizer32bit1State(T* g, T* p,
 
   float s1_vals[NUM_VALS];
 
-  typedef cub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, cub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
-  typedef cub::BlockLoad<float, BLOCK_SIZE/NUM_VALS, NUM_VALS, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
-  typedef cub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
+  typedef hipcub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
+  typedef hipcub::BlockLoad<float, BLOCK_SIZE/NUM_VALS, NUM_VALS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
 
   __shared__ union {
       typename Load::TempStorage load;
@@ -1160,7 +1141,7 @@ __global__ void kPreconditionOptimizer32bit1State(T* g, T* p,
       if(threadIdx.x == 0)
         atomicAdd(&unorm[0], s1_vals[0]);
 
-      __syncwarp();
+      //__syncwarp();
   }
 }
 
@@ -1190,11 +1171,11 @@ __global__ void kOptimizer32bit1State(T *g, T *p,
 
   float s1_vals[NUM_PER_THREAD];
 
-  typedef cub::BlockLoad<T, TH, NUM_PER_THREAD, cub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
-  typedef cub::BlockStore<T, TH, NUM_PER_THREAD, cub::BLOCK_STORE_WARP_TRANSPOSE> Store;
+  typedef hipcub::BlockLoad<T, TH, NUM_PER_THREAD, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> Load;
+  typedef hipcub::BlockStore<T, TH, NUM_PER_THREAD, hipcub::BLOCK_STORE_WARP_TRANSPOSE> Store;
 
-  typedef cub::BlockLoad<float, TH, NUM_PER_THREAD, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
-  typedef cub::BlockStore<float, TH, NUM_PER_THREAD, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreFloat;
+  typedef hipcub::BlockLoad<float, TH, NUM_PER_THREAD, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadFloat;
+  typedef hipcub::BlockStore<float, TH, NUM_PER_THREAD, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreFloat;
 
   __shared__ union {
       typename Load::TempStorage load;
@@ -1290,9 +1271,9 @@ kPreconditionOptimizerStatic8bit2State(T* p, T* __restrict__ const g, unsigned c
     unsigned char m_c1[NUM8BIT];
     unsigned char r_c2[NUM8BIT];
 
-    typedef cub::BlockLoad<T, NUM_THREADS, NUM8BIT, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, NUM_THREADS, NUM8BIT, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadUInt8;
-    typedef cub::BlockReduce<float, NUM_THREADS> BlockReduce;
+    typedef hipcub::BlockLoad<T, NUM_THREADS, NUM8BIT, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, NUM_THREADS, NUM8BIT, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadUInt8;
+    typedef hipcub::BlockReduce<float, NUM_THREADS> BlockReduce;
 
 
     __shared__ union {
@@ -1359,13 +1340,13 @@ kPreconditionOptimizerStatic8bit2State(T* p, T* __restrict__ const g, unsigned c
     }
 
     __syncthreads();
-    local_max_s1 = BlockReduce(temp_storage.reduce).Reduce(local_max_s1, cub::Max(), valid_items);
+    local_max_s1 = BlockReduce(temp_storage.reduce).Reduce(local_max_s1, hipcub::Max(), valid_items);
     __syncthreads();
-    local_max_s2 = BlockReduce(temp_storage.reduce).Reduce(local_max_s2, cub::Max(), valid_items);
+    local_max_s2 = BlockReduce(temp_storage.reduce).Reduce(local_max_s2, hipcub::Max(), valid_items);
     if(unorm != NULL)
     {
       __syncthreads();
-      local_unorm = BlockReduce(temp_storage.reduce).Reduce(local_unorm, cub::Sum(), valid_items);
+      local_unorm = BlockReduce(temp_storage.reduce).Reduce(local_unorm, hipcub::Sum(), valid_items);
     }
 
     if(threadIdx.x == 0)
@@ -1419,11 +1400,11 @@ kOptimizerStatic8bit2State(T* p, T* const g, unsigned char* state1, unsigned cha
     unsigned char c2s[NUM_PER_THREAD2];
     T p_vals[NUM_PER_THREAD2];
     T g_vals[NUM_PER_THREAD2];
-    typedef cub::BlockLoad<T, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
+    typedef hipcub::BlockLoad<T, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
 
-    typedef cub::BlockStore<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
-    typedef cub::BlockStore<T, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
+    typedef hipcub::BlockStore<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+    typedef hipcub::BlockStore<T, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
     __shared__ float smem_quantiles1[256];
     __shared__ float smem_quantiles2[256];
@@ -1527,9 +1508,9 @@ kPreconditionOptimizerStatic8bit1State(T* p, T* __restrict__ const g, unsigned c
     T g_vals[NUM8BIT];
     unsigned char m_c1[NUM8BIT];
 
-    typedef cub::BlockLoad<T, NUM_THREADS, NUM8BIT, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, NUM_THREADS, NUM8BIT, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadUInt8;
-    typedef cub::BlockReduce<float, NUM_THREADS> BlockReduce;
+    typedef hipcub::BlockLoad<T, NUM_THREADS, NUM8BIT, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, NUM_THREADS, NUM8BIT, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadUInt8;
+    typedef hipcub::BlockReduce<float, NUM_THREADS> BlockReduce;
 
 
     __shared__ union {
@@ -1583,12 +1564,12 @@ kPreconditionOptimizerStatic8bit1State(T* p, T* __restrict__ const g, unsigned c
     }
 
     __syncthreads();
-    local_max_s1 = BlockReduce(temp_storage.reduce).Reduce(local_max_s1, cub::Max(), valid_items);
+    local_max_s1 = BlockReduce(temp_storage.reduce).Reduce(local_max_s1, hipcub::Max(), valid_items);
     if(threadIdx.x == 0){ atomicMax(&new_max1[0], local_max_s1); }
     if(unorm != NULL)
     {
       __syncthreads();
-      local_unorm = BlockReduce(temp_storage.reduce).Reduce(local_unorm, cub::Sum(), valid_items);
+      local_unorm = BlockReduce(temp_storage.reduce).Reduce(local_unorm, hipcub::Sum(), valid_items);
       if(threadIdx.x == 0){ atomicAdd(&unorm[0], local_unorm); }
     }
 
@@ -1626,11 +1607,11 @@ kOptimizerStatic8bit1State(T* p, T* const g, unsigned char* state1,
     unsigned char c1s[NUM_PER_THREAD2];
     T p_vals[NUM_PER_THREAD2];
     T g_vals[NUM_PER_THREAD2];
-    typedef cub::BlockLoad<T, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
+    typedef hipcub::BlockLoad<T, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
 
-    typedef cub::BlockStore<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
-    typedef cub::BlockStore<T, NUM_THREADS2, NUM_PER_THREAD2, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
+    typedef hipcub::BlockStore<unsigned char, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+    typedef hipcub::BlockStore<T, NUM_THREADS2, NUM_PER_THREAD2, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
     __shared__ float smem_quantiles1[256];
 
@@ -1723,8 +1704,8 @@ __global__ void kPercentileClipping(T * __restrict__ g, float *gnorm_vec, int st
   const int n_full = (BLOCK_SIZE*(n/BLOCK_SIZE)) + (n % BLOCK_SIZE == 0 ? 0 : BLOCK_SIZE);
   int valid_items = 0;
 
-  typedef cub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
-  typedef cub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+  typedef hipcub::BlockReduce<float, BLOCK_SIZE/NUM_VALS> BlockReduce;
+  typedef hipcub::BlockLoad<T, BLOCK_SIZE/NUM_VALS, NUM_VALS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
 
   __shared__ typename BlockReduce::TempStorage reduce;
 
@@ -1797,16 +1778,16 @@ kOptimizerStatic8bit2StateBlockwise(T* p, T* __restrict__ const g, unsigned char
     unsigned char c2s[N_PER_TH];
     T g_vals[N_PER_TH];
     T p_vals[N_PER_TH];
-    typedef cub::BlockLoad<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
+    typedef hipcub::BlockLoad<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
 
-    typedef cub::BlockStore<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
-    typedef cub::BlockStore<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
+    typedef hipcub::BlockStore<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+    typedef hipcub::BlockStore<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
     __shared__ float smem_quantiles1[LANES][257];
     __shared__ float smem_quantiles2[LANES][257];
-    typedef cub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce1;
-    typedef cub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce2;
+    typedef hipcub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce1;
+    typedef hipcub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce2;
     __shared__ typename BlockReduce1::TempStorage reduce1;
     __shared__ typename BlockReduce2::TempStorage reduce2;
     __shared__ float smem_exchange1[1];
@@ -1883,8 +1864,8 @@ kOptimizerStatic8bit2StateBlockwise(T* p, T* __restrict__ const g, unsigned char
 
 
         //  reduce: 2.51/1.60 -> 2.67/1.69
-        new_local_abs_max1 = BlockReduce1(reduce1).Reduce(new_local_abs_max1, cub::Max());
-        new_local_abs_max2 = BlockReduce2(reduce2).Reduce(new_local_abs_max2, cub::Max());
+        new_local_abs_max1 = BlockReduce1(reduce1).Reduce(new_local_abs_max1, hipcub::Max());
+        new_local_abs_max2 = BlockReduce2(reduce2).Reduce(new_local_abs_max2, hipcub::Max());
 
         if(threadIdx.x == 0)
         {
@@ -1979,14 +1960,14 @@ kOptimizerStatic8bit1StateBlockwise(T* p, T* __restrict__ const g, unsigned char
     T g_vals[N_PER_TH];
 		T p_vals[N_PER_TH];
 
-    typedef cub::BlockLoad<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
-    typedef cub::BlockLoad<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
+    typedef hipcub::BlockLoad<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadT;
+    typedef hipcub::BlockLoad<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadChar;
 
-    typedef cub::BlockStore<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
-    typedef cub::BlockStore<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, cub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
+    typedef hipcub::BlockStore<unsigned char, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreChar;
+    typedef hipcub::BlockStore<T, BLOCK_SIZE/N_PER_TH, N_PER_TH, hipcub::BLOCK_STORE_WARP_TRANSPOSE> StoreT;
 
     __shared__ float smem_quantiles1[LANES][257];
-    typedef cub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce1;
+    typedef hipcub::BlockReduce<float, BLOCK_SIZE/N_PER_TH> BlockReduce1;
     __shared__ typename BlockReduce1::TempStorage reduce1;
     __shared__ float smem_exchange1[1];
 
@@ -2073,7 +2054,7 @@ kOptimizerStatic8bit1StateBlockwise(T* p, T* __restrict__ const g, unsigned char
 
 
         //  reduce: 2.51/1.60 -> 2.67/1.69
-        new_local_abs_max1 = BlockReduce1(reduce1).Reduce(new_local_abs_max1, cub::Max());
+        new_local_abs_max1 = BlockReduce1(reduce1).Reduce(new_local_abs_max1, hipcub::Max());
 
         if(threadIdx.x == 0)
           smem_exchange1[0] = new_local_abs_max1;
@@ -2154,10 +2135,10 @@ template<typename T, int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_
   const int base_idx = (base_row*cols) + base_col;
   const int items_per_load = ITEMS_PER_THREAD*THREADS;
 
-  typedef cub::BlockLoad<T, THREADS, ITEMS_PER_THREAD, cub::BLOCK_LOAD_VECTORIZE> LoadT;
-  typedef cub::BlockReduce<float, THREADS> BlockRowReduce;
-  typedef cub::BlockReduce<int, THREADS> BlockRowSum;
-  typedef cub::BlockExchange<float, THREADS, ITEMS_PER_THREAD> BlockExchange;
+  typedef hipcub::BlockLoad<T, THREADS, ITEMS_PER_THREAD, hipcub::BLOCK_LOAD_VECTORIZE> LoadT;
+  typedef hipcub::BlockReduce<float, THREADS> BlockRowReduce;
+  typedef hipcub::BlockReduce<int, THREADS> BlockRowSum;
+  typedef hipcub::BlockExchange<float, THREADS, ITEMS_PER_THREAD> BlockExchange;
 
   __shared__ union {
     typename BlockExchange::TempStorage exchange;
@@ -2240,7 +2221,7 @@ template<typename T, int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_
 
     __syncthreads();
 
-    row_absmax = (float)BlockRowReduce(temp_storage.rowreduce).Reduce(local_data_fp32, cub::Max());
+    row_absmax = (float)BlockRowReduce(temp_storage.rowreduce).Reduce(local_data_fp32, hipcub::Max());
     if(SPARSE_DECOMP)
     {
       __syncthreads();
@@ -2261,8 +2242,8 @@ template<typename T, int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_
   }
 
   // 4. store data via atomicMax
-  // to store col data efficiently we need to rewrite the smem blocked data [0, 1, 2, 3...] for t0
-  // into a striped arrangement: [0, 8, 16, 24, ..] for t0
+  // to store col data efficienctly we need to rewrite the smem blocked data [0, 1, 2, 3...] for t0
+  // into a striped arangement: [0, 8, 16, 24, ..] for t0
   __syncthreads();
   BlockExchange(temp_storage.exchange).BlockedToStriped(local_col_absmax_values);
 
@@ -2312,7 +2293,7 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
 
   // data is in 32 column-tile major with tile width 32 columns and numRows rows
   // L1. Load sub-tile row/col statistics. Each thread only holds 1 col, load rows into shared memory.
-  // L2. Load data in warp-striped arrangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
+  // L2. Load data in warp-striped arangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
   // C1. Compute val(row_stat*col_stat)/(127*127) (load 1/(127*127 into register))
   // C2. Compute normalization values and store col values in register
   // S1. Store C1 into 16-bit output
@@ -2324,13 +2305,16 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
 
   const int n_out = numRows*numCols;
 
-  int num_row_tiles = (numRows/SUBTILE_ROWS) + (numRows % SUBTILE_ROWS == 0 ? 0 : 1);
+  //int num_row_tiles = (numRows/SUBTILE_ROWS) + (numRows % SUBTILE_ROWS == 0 ? 0 : 1);
   // we have tiles of size numRows*32, thus col only increases every numRows
   // num_row_tiles is the tiles after which the column increases by 32
   // blockIdx.x is the index of the current tile
-  int col = ((threadIdx.x % 32) + ((blockIdx.x/num_row_tiles)*32));
+  //int col = ((threadIdx.x % 32) + ((blockIdx.x/num_row_tiles)*32));
   // base_row increases by SUBTILE_ROWS every block. It wraps back to zero once num_row_tiles is reached
-  int base_row = (blockIdx.x*SUBTILE_ROWS) % (num_row_tiles*SUBTILE_ROWS);
+  //int base_row = (blockIdx.x*SUBTILE_ROWS) % (num_row_tiles*SUBTILE_ROWS);
+
+  int block_offset = blockIdx.x * THREADS * ITEMS_PER_THREAD;
+  int thread_offset = threadIdx.x * ITEMS_PER_THREAD;
 
   // SUBTILE_ROWS is independent from ITEMS_PER_THREAD is independent from THREADS
   // subtiles have 32*SUBTILE_ROWS elements <= THREADS*ITEMS_PER_THREAD
@@ -2345,20 +2329,33 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
 
   int local_values[ITEMS_PER_THREAD];
   half local_output[ITEMS_PER_THREAD];
-  float local_rowStats[ITEMS_PER_THREAD];
-  __shared__ float smem_rowStats[SUBTILE_ROWS];
+  //float local_rowStats[ITEMS_PER_THREAD];
+  //__shared__ float smem_rowStats[SUBTILE_ROWS];
 
-  typedef cub::BlockLoad<int, THREADS, ITEMS_PER_THREAD, cub::BLOCK_LOAD_DIRECT> LoadInt32;
-  typedef cub::BlockExchange<int, THREADS, ITEMS_PER_THREAD> ExchangeInt32;
+  typedef hipcub::BlockLoad<int, THREADS, ITEMS_PER_THREAD, hipcub::BLOCK_LOAD_DIRECT> LoadInt32;
+  //typedef hipcub::BlockExchange<int, THREADS, ITEMS_PER_THREAD> ExchangeInt32;
   __shared__ typename LoadInt32::TempStorage loadint32;
-  __shared__ typename ExchangeInt32::TempStorage exchangeint32;
+  //__shared__ typename ExchangeInt32::TempStorage exchangeint32;
 
 
   // L1. Load sub-tile row/col statistics. Each thread only holds 1 col, load rows into shared memory.
-  float colStat = col >= numCols ? 0.0f : colStats[col];
-  float local_biasValue = ((bias == NULL) || (col >= numCols)) ? 0.0f : __half2float(bias[col]);
+  //float colStat = col >= numCols ? 0.0f : colStats[col];
+  //float local_biasValue = ((bias == NULL) || (col >= numCols)) ? 0.0f : __half2float(bias[col]);
+int row_idx, col_idx;
+  float colStat[ITEMS_PER_THREAD];
+  float local_biasValue[ITEMS_PER_THREAD];
+  float rowStat[ITEMS_PER_THREAD];
+  #pragma unroll ITEMS_PER_THREAD
+  for(int j = 0; j < ITEMS_PER_THREAD; j++)
+  {
+       row_idx = (block_offset + thread_offset + j) / numCols;
+       col_idx = (block_offset + thread_offset + j) % numCols;
+       colStat[j] = col_idx >= numCols ? 0.0f : colStats[col_idx];
+       local_biasValue[j] = ((bias == NULL) || (col_idx >= numCols)) ? 0.0f : __half2float(bias[col_idx]);
+       rowStat[j] = row_idx >= numRows ? 0.0f : rowStats[row_idx];
+  }
   // no block loads for rows for now -- keep it simple
-  for(int j = threadIdx.x; j < SUBTILE_ROWS; j+=blockDim.x)
+  /*for(int j = threadIdx.x; j < SUBTILE_ROWS; j+=blockDim.x)
   {
     // todo: is this global mem access slow due to overlaps or does the L1 cache work well here?
     int row = (base_row+j) % numRows; // wrap around
@@ -2366,12 +2363,25 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
     // todo: update description about striped shared memory, it is not needed
     // rowidx: [0, 1, 2, 3...] and each warp reads ITEMS_PER_THREAD consequitive elements
     smem_rowStats[j] = rowStats[row];
-  }
+  }*/
   __syncthreads();
 
+int valid_items = block_offset + THREADS * ITEMS_PER_THREAD < n_out ? THREADS * ITEMS_PER_THREAD : n_out - block_offset;
+  LoadInt32(loadint32).Load(&(A[block_offset]), local_values, valid_items, 0);
+
+  #pragma unroll ITEMS_PER_THREAD
+  for(int j = 0; j < ITEMS_PER_THREAD; j++)
+    local_output[j] = __float2half((local_values[j]*MM_DEQUANT_CONST*rowStat[j]*colStat[j]) + local_biasValue[j]);
 
   // each block processes SUBTILE_ROWS*32 elements
-  const int items_per_load = THREADS*ITEMS_PER_THREAD;
+  #pragma unroll ITEMS_PER_THREAD
+  for(int j = 0; j < ITEMS_PER_THREAD; j++)
+  {
+    int outIdx = block_offset + thread_offset + j;
+    if(outIdx< n_out)
+      out[outIdx] = local_output[j];
+  }
+  /*const int items_per_load = THREADS*ITEMS_PER_THREAD;
   const int rows_per_load = items_per_load/32;
 
   int subtile_base_row = (threadIdx.x / 32)*ITEMS_PER_THREAD; // row within the tile
@@ -2385,7 +2395,7 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
     if(valid_items <= 0) // the sub-tile might have more elements than the tile itself
       break;
 
-    // L2. Load data in warp-striped arrangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
+    // L2. Load data in warp-striped arangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
     LoadInt32(loadint32).Load(&(A[subtile_idx]), local_values, valid_items, 0);
     ExchangeInt32(exchangeint32).BlockedToWarpStriped(local_values, local_values);
 
@@ -2412,7 +2422,7 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
     }
 
     row_offset += rows_per_load;
-  }
+  }*/
 }
 
 
@@ -2436,9 +2446,9 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int S
   const int base_idx = (base_row*cols) + base_col;
   const int items_per_load = ITEMS_PER_THREAD*THREADS;
 
-  typedef cub::BlockLoad<half, THREADS, ITEMS_PER_THREAD, cub::BLOCK_LOAD_VECTORIZE> LoadHalf;
+  typedef hipcub::BlockLoad<half, THREADS, ITEMS_PER_THREAD, hipcub::BLOCK_LOAD_VECTORIZE> LoadHalf;
   __shared__ typename LoadHalf::TempStorage loadhalf;
-  typedef cub::BlockStore<char, THREADS, ITEMS_PER_THREAD, cub::BLOCK_STORE_VECTORIZE> StoreInt8;
+  typedef hipcub::BlockStore<char, THREADS, ITEMS_PER_THREAD, hipcub::BLOCK_STORE_VECTORIZE> StoreInt8;
   __shared__ typename StoreInt8::TempStorage storeint8;
 
   __shared__ float smem_row_stats[TILE_ROWS];
@@ -2571,7 +2581,7 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int T
   // so that we can have contiguous stores
   __shared__ char smem_data[32*33*ITEMS_PER_THREAD];
   char local_data[ITEMS_PER_THREAD];
-  typedef cub::BlockExchange<char, THREADS, ITEMS_PER_THREAD> BlockExchange;
+  typedef hipcub::BlockExchange<char, THREADS, ITEMS_PER_THREAD> BlockExchange;
 
   // we load row after row from the base_position
   // Load data row by row
@@ -2652,7 +2662,7 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int T
                   // row1 [col0 col1 ... col31]
                   // ...
                   //
-                  // As such we read consecutive entries with 256 threads (8rows x 32 columns)
+                  // As such we read consequtive entries with 256 threads (8rows x 32 columns)
                   // as j increase, the row increase by a factor of 8
                   // We load 8 rows per subrow loop, and subrow increase by 8 per loop
                   // so we have an offset of 8 rows every loop or (subrow/warps)*8 = (subrow/8)*8
@@ -2749,7 +2759,7 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int T
                     // each of these has 32 values in total for 32*4 = 128 as offset if odd
                     // every set of 4 columns increases the total offset by 16
                     // each even row increase the offset by 4, for example row 2 is offset by 4, 4 by 6 etc so: subrow/2*4 = subrow*2
-                    // this happens every 8 rows anew (subrow % 8)
+                    // this happends every 8 rows anew (subrow % 8)
                     // one writes 4 columns at once that is (col % 4) for the particular index in the subtile
                     int subcol = warp_lane;
 
@@ -2998,7 +3008,7 @@ template <int FORMAT> __global__ void kExtractOutliers(char *A, int *idx, char *
 {
 	int local_colidx = idx[blockIdx.x];
 
-	if(FORMAT==COL_TURING)
+	/*if(FORMAT==COL_TURING)
 	{
 		// TURING FORMAT:
 		// 8*32 tiles with 4*4 subtiles
@@ -3054,6 +3064,17 @@ template <int FORMAT> __global__ void kExtractOutliers(char *A, int *idx, char *
 			int out_idx = (row*idx_size) + blockIdx.x;
 			out[out_idx] = val;
 		}
+}*/
+
+	//Only col format is used on ROCm
+	for(int row = threadIdx.x; row < rowsA; row+= blockDim.x)
+	{
+		//col-major offset
+		int offset = local_colidx * rowsA + row;
+	
+		char val = A[offset];
+		int out_idx = (row*idx_size) + blockIdx.x;
+		out[out_idx] = val;
 	}
 }
 
@@ -3065,7 +3086,7 @@ template <int FORMAT> __global__ void kExtractOutliers(char *A, int *idx, char *
 //// 2. Load k x k into registers
 //// 3. dequantize and store in second pair of k x k
 //// 4. matmul
-//// 5. sum with cub
+//// 5. sum with hipcub
 //// 6. store outputs
 //// TC kernel
 //// use k warps per thread block
@@ -3075,7 +3096,7 @@ template <int FORMAT> __global__ void kExtractOutliers(char *A, int *idx, char *
 //// 4. do dequantization from register of B into second pair of registers
 //// 5. store (4) into fragment
 //// 6. matmul aggregate into fragment C
-//// 7. aggregate files of C into shared memory block C
+//// 7. aggreecate files of C into shared memroy block C
 //// 8. sum (7)
 //// 9. write outputs to matmul output matrix
 //}
@@ -3119,10 +3140,10 @@ template <typename T, int BITS, int THREADS> __global__ void gemm_device(int M, 
   __shared__ T smem_B[2*batch_size_warps*16*32 + (2*16*(batch_size_warps-1))];
   //__shared__ T smem_C[8*32];
 
-   wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> a_frag;
-   wmma::fragment<wmma::matrix_b, 8, 32, 16, half, wmma::col_major> b_frag;
-   wmma::fragment<wmma::accumulator, 8, 32, 16, half> c_frag;
-   wmma::fill_fragment(c_frag, 0.0f);
+   rocwmma::fragment<rocwmma::matrix_a, 8, 32, 16, half, rocwmma::row_major> a_frag;
+   rocwmma::fragment<rocwmma::matrix_b, 8, 32, 16, half, rocwmma::col_major> b_frag;
+   rocwmma::fragment<rocwmma::accumulator, 8, 32, 16, half> c_frag;
+   rocwmma::fill_fragment(c_frag, 0.0f);
 
   int ticktock = 0;
   int idx = 0 + threadIdx.x;
@@ -3277,9 +3298,9 @@ template <typename T, int BITS, int THREADS> __global__ void gemm_device(int M, 
     if(warp_id == (WARPS-1))
       for(int k = 0; k < batch_size_warps; k++)
       {
-        wmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
-        wmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
-        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        rocwmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
+        rocwmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
+        rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
       }
   }
 
@@ -3291,14 +3312,14 @@ template <typename T, int BITS, int THREADS> __global__ void gemm_device(int M, 
   ticktock = ticktock == 0 ? 1 : 0;
   for(int k = 0; k < batch_size_warps; k++)
   {
-    wmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
-    wmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
-    wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    rocwmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
+    rocwmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
+    rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
   }
 
   // 129 mu
   if(warp_id == (WARPS-1))
-    wmma::store_matrix_sync(&(smem_A[0]), c_frag, 32, wmma::mem_row_major);
+    rocwmma::store_matrix_sync(&(smem_A[0]), c_frag, 32, rocwmma::mem_row_major);
 
   if(col_offset + warp_lane < M)
     out[col_offset + warp_lane] = smem_A[warp_lane];
@@ -3348,10 +3369,10 @@ template <typename T, int THREADS> __global__ void kgemm_4bit_inference(int M, i
   __shared__ T smem_B[2*batch_size_warps*16*32 + (2*16*(batch_size_warps-1))];
   __shared__ T smem_C[8*32];
 
-   wmma::fragment<wmma::matrix_a, 8, 32, 16, half, wmma::row_major> a_frag;
-   wmma::fragment<wmma::matrix_b, 8, 32, 16, half, wmma::col_major> b_frag;
-   wmma::fragment<wmma::accumulator, 8, 32, 16, half> c_frag;
-   wmma::fill_fragment(c_frag, 0.0f);
+   rocwmma::fragment<rocwmma::matrix_a, 8, 32, 16, half, rocwmma::row_major> a_frag;
+   rocwmma::fragment<rocwmma::matrix_b, 8, 32, 16, half, rocwmma::col_major> b_frag;
+   rocwmma::fragment<rocwmma::accumulator, 8, 32, 16, half> c_frag;
+   rocwmma::fill_fragment(c_frag, 0.0f);
 
   for(int i = threadIdx.x; i < (8*32); i+=blockDim.x)
     smem_C[i] = 0.0f;
@@ -3492,9 +3513,9 @@ template <typename T, int THREADS> __global__ void kgemm_4bit_inference(int M, i
     if(warp_id == (WARPS-1))
       for(int k = 0; k < batch_size_warps; k++)
       {
-        wmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
-        wmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
-        wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+        rocwmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
+        rocwmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
+        rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
       }
   }
 
@@ -3513,14 +3534,14 @@ template <typename T, int THREADS> __global__ void kgemm_4bit_inference(int M, i
   {
     //if(warp_lane == 0)
       //printf("%i %i %i %i\n", (ticktock*batch_size_warps + k)*a_tile_offset, k, ticktock, threadIdx.x);
-    wmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
-    wmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
-    wmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
+    rocwmma::load_matrix_sync(a_frag, &(smem_A[(ticktock*batch_size_warps + k)*a_tile_offset]), 16); //  111 mu
+    rocwmma::load_matrix_sync(b_frag, &(smem_B[(ticktock*batch_size_warps + k)*b_tile_offset]), 16); // 35 mu
+    rocwmma::mma_sync(c_frag, a_frag, b_frag, c_frag);
   }
 
   // 129 mu
   if(warp_id == (WARPS-1))
-    wmma::store_matrix_sync(&(smem_C[0]), c_frag, 32, wmma::mem_row_major);
+    rocwmma::store_matrix_sync(&(smem_C[0]), c_frag, 32, rocwmma::mem_row_major);
 
   //printnonzero<T>(smem_C, 32, "");
 
@@ -3537,7 +3558,7 @@ template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inferenc
   // load step-by-step in chunks of [32,warps]: 1x32 * [32,warps] -> [1,warps]
   // 4 warps -> 4 loads per iter
   // 1x32 * 32x4 -> 1x4 outputs per thread block
-  typedef cub::WarpReduce<float> WarpReduce;
+  typedef hipcub::WarpReduce<float, 32> WarpReduce;
   __shared__ typename WarpReduce::TempStorage temp_storage[THREADS/32];
 
   const int warp_idx = threadIdx.x / 32;
@@ -3657,11 +3678,11 @@ template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inferenc
 //// 2. Dequantize B
 //// 3. Fetch data from A and multiply
 //
-//  typedef cub::BlockLoad<T, THREADS , ITEMS, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadA;
+//  typedef hipcub::BlockLoad<T, THREADS , ITEMS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadA;
 //  //__shared__ typename LoadA::TempStorage loada;
-//  typedef cub::BlockLoad<T, THREADS , ITEMS, cub::BLOCK_LOAD_WARP_TRANSPOSE> LoadB;
+//  typedef hipcub::BlockLoad<T, THREADS , ITEMS, hipcub::BLOCK_LOAD_WARP_TRANSPOSE> LoadB;
 //  //__shared__ typename LoadB::TempStorage loadb;
-//  typedef cub::BlockReduce<T, THREADS> BlockReduce;
+//  typedef hipcub::BlockReduce<T, THREADS> BlockReduce;
 //  // Allocate shared memory for BlockReduce
 //  //__shared__ typename BlockReduce::TempStorage reduce;
 //
@@ -3733,7 +3754,7 @@ template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inferenc
 //          local_accC[row] += tileA[idxA]*local_B[k];
 //        }
 //
-//        local_accC[row] = BlockReduce(temp_storage.reduce).Reduce(local_accC[row], cub::Sum());
+//        local_accC[row] = BlockReduce(temp_storage.reduce).Reduce(local_accC[row], hipcub::Sum());
 //        if(threadIdx.x == 0)
 //          atomicAdd(&accumulatorC[row*8 + col], local_accC[row]);
 //      }
@@ -3817,18 +3838,18 @@ template __global__ void kgemm_4bit_inference<half, 160>(int M, int N, int K, ha
 template __global__ void kgemm_4bit_inference<half, 256>(int M, int N, int K, half * __restrict__ const A, unsigned char *B,  float *absmax, half * out,  int lda, int ldb, int ldc, int blocksize);
 
 template __global__ void kgemm_4bit_inference_naive<half, 128, 16>(int M, int N, int K, half * __restrict__ const A, unsigned char *B,  float *absmax, const float *datatype, half * out,  int lda, int ldb, int ldc, int blocksize);
-template __global__ void kgemm_4bit_inference_naive<__nv_bfloat16, 128, 16>(int M, int N, int K, __nv_bfloat16 * __restrict__ const A, unsigned char *B,  float *absmax, const float *datatype, __nv_bfloat16 * out,  int lda, int ldb, int ldc, int blocksize);
+template __global__ void kgemm_4bit_inference_naive<hip_bfloat16, 128, 16>(int M, int N, int K, hip_bfloat16 * __restrict__ const A, unsigned char *B,  float *absmax, const float *datatype, hip_bfloat16 * out,  int lda, int ldb, int ldc, int blocksize);
 template __global__ void kgemm_4bit_inference_naive<float, 128, 32>(int M, int N, int K, float * __restrict__ const A, unsigned char *B,  float *absmax, const float *datatype, float * out,  int lda, int ldb, int ldc, int blocksize);
 
 template __global__ void kExtractOutliers<COL_TURING>(char *A, int *idx, char *out, int idx_size, int rowsA, int colsA, int tiledRowsA, int tiledColsA);
 template __global__ void kExtractOutliers<COL_AMPERE>(char *A, int *idx, char *out, int idx_size, int rowsA, int colsA, int tiledRowsA, int tiledColsA);
 
-template __global__ void kspmm_coo_very_sparse_naive<half, 8, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
-template __global__ void kspmm_coo_very_sparse_naive<half, 16, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
-template __global__ void kspmm_coo_very_sparse_naive<half, 32, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
-template __global__ void kspmm_coo_very_sparse_naive<signed char, 8, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
-template __global__ void kspmm_coo_very_sparse_naive<signed char, 16, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
-template __global__ void kspmm_coo_very_sparse_naive<signed char, 32, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<half, 8, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<half, 16, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<half, 32, 16>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, half *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<signed char, 8, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<signed char, 16, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
+template __global__ void kspmm_coo_very_sparse_naive<signed char, 32, 8>(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, signed char *B, half *out, float *dequant_stats, int nnz, int rowsA, int rowsB, int colsB);
 
 template __global__ void kTransformRowToFormat<256, 8, 32, 32*8, 0, COL32>(char *__restrict__ const A, char *out, int rows, int cols, int tiledCols, int outRows, int outCols);
 template __global__ void kTransformRowToFormat<256, 8, 32, 32*8, 1, COL32>(char *__restrict__ const A, char *out, int rows, int cols, int tiledCols, int outRows, int outCols);
@@ -3860,7 +3881,7 @@ MAKE_PreconditionOptimizer32bit1State(RMSPROP, half)
 MAKE_PreconditionOptimizer32bit1State(RMSPROP, float)
 MAKE_PreconditionOptimizer32bit1State(LION, half)
 MAKE_PreconditionOptimizer32bit1State(LION, float)
-MAKE_PreconditionOptimizer32bit1State(LION, __nv_bfloat16)
+MAKE_PreconditionOptimizer32bit1State(LION, hip_bfloat16)
 MAKE_PreconditionOptimizer32bit1State(ADAGRAD, half)
 MAKE_PreconditionOptimizer32bit1State(ADAGRAD, float)
 
@@ -3874,7 +3895,7 @@ MAKE_Optimizer32bit1State(RMSPROP, half)
 MAKE_Optimizer32bit1State(RMSPROP, float)
 MAKE_Optimizer32bit1State(LION, half)
 MAKE_Optimizer32bit1State(LION, float)
-MAKE_Optimizer32bit1State(LION, __nv_bfloat16)
+MAKE_Optimizer32bit1State(LION, hip_bfloat16)
 MAKE_Optimizer32bit1State(ADAGRAD, half)
 MAKE_Optimizer32bit1State(ADAGRAD, float)
 
@@ -3886,14 +3907,15 @@ template __global__ void kPreconditionOptimizer32bit2State<gtype, oname, 4096, 8
 
 MAKE_PreconditionOptimizer32bit2State(ADAM, float)
 MAKE_PreconditionOptimizer32bit2State(ADAM, half)
-MAKE_PreconditionOptimizer32bit2State(ADAM, __nv_bfloat16)
+MAKE_PreconditionOptimizer32bit2State(ADAM, hip_bfloat16)
 
 template __global__ void kOptimizer32bit2State<float, ADAM>(float* g, float* p, float* state1, float* state2, float *unorm, const float max_unorm, const float param_norm,
     const float beta1, const float beta2, const float eps, const float weight_decay,const int step, const float lr, const float gnorm_scale, const bool skip_zeros, const int n);
 template __global__ void kOptimizer32bit2State<half, ADAM>(half* g, half* p, float* state1, float* state2, float *unorm, const float max_unorm, const float param_norm,
     const float beta1, const float beta2, const float eps, const float weight_decay,const int step, const float lr, const float gnorm_scale, const bool skip_zeros, const int n);
-template __global__ void kOptimizer32bit2State<__nv_bfloat16, ADAM>(__nv_bfloat16* g, __nv_bfloat16* p, float* state1, float* state2, float *unorm, const float max_unorm, const float param_norm,
+template __global__ void kOptimizer32bit2State<hip_bfloat16, ADAM>(hip_bfloat16* g, hip_bfloat16* p, float* state1, float* state2, float *unorm, const float max_unorm, const float param_norm,
     const float beta1, const float beta2, const float eps, const float weight_decay,const int step, const float lr, const float gnorm_scale, const bool skip_zeros, const int n);
+
 
 #define MAKE_PreconditionStatic8bit1State(oname, gtype) \
 template __global__ void kPreconditionOptimizerStatic8bit1State<gtype, oname>(gtype* p, gtype* __restrict__ const g, unsigned char*__restrict__  const state1,  \
@@ -3973,21 +3995,24 @@ MAKE_kQuantizeBlockwise(half,  1024, 4, 0, General8bit)
 MAKE_kQuantizeBlockwise(half,   512, 2, 0, General8bit)
 MAKE_kQuantizeBlockwise(half,   256, 2, 0, General8bit)
 MAKE_kQuantizeBlockwise(half,   128, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(half,    64, 2, 0, General8bit)
+//MAKE_kQuantizeBlockwise(half,    64, 2, 0, General8bit)
+
 MAKE_kQuantizeBlockwise(half,  4096, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(half,  2048, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(half,  1024, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(half,   512, 2, 0, FP4)
 MAKE_kQuantizeBlockwise(half,   256, 2, 0, FP4)
 MAKE_kQuantizeBlockwise(half,   128, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(half,    64, 2, 0, FP4)
+//MAKE_kQuantizeBlockwise(half,    64, 2, 0, FP4)
+
 MAKE_kQuantizeBlockwise(half,  4096, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(half,  2048, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(half,  1024, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(half,   512, 2, 0, NF4)
 MAKE_kQuantizeBlockwise(half,   256, 2, 0, NF4)
 MAKE_kQuantizeBlockwise(half,   128, 2, 0, NF4)
-MAKE_kQuantizeBlockwise(half,    64, 2, 0, NF4)
+//MAKE_kQuantizeBlockwise(half,    64, 2, 0, NF4)
+
 MAKE_kQuantizeBlockwise(float, 4096, 4, 0, General8bit)
 MAKE_kQuantizeBlockwise(float, 4096, 4, 1, General8bit)
 MAKE_kQuantizeBlockwise(float, 2048, 4, 0, General8bit)
@@ -3995,44 +4020,48 @@ MAKE_kQuantizeBlockwise(float, 1024, 4, 0, General8bit)
 MAKE_kQuantizeBlockwise(float,  512, 2, 0, General8bit)
 MAKE_kQuantizeBlockwise(float,  256, 2, 0, General8bit)
 MAKE_kQuantizeBlockwise(float,  128, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(float,   64, 2, 0, General8bit)
+//MAKE_kQuantizeBlockwise(float,   64, 2, 0, General8bit)
+
 MAKE_kQuantizeBlockwise(float, 4096, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(float, 2048, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(float, 1024, 4, 0, FP4)
 MAKE_kQuantizeBlockwise(float,  512, 2, 0, FP4)
 MAKE_kQuantizeBlockwise(float,  256, 2, 0, FP4)
 MAKE_kQuantizeBlockwise(float,  128, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(float,   64, 2, 0, FP4)
+//MAKE_kQuantizeBlockwise(float,   64, 2, 0, FP4)
+
 MAKE_kQuantizeBlockwise(float, 4096, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(float, 2048, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(float, 1024, 4, 0, NF4)
 MAKE_kQuantizeBlockwise(float,  512, 2, 0, NF4)
 MAKE_kQuantizeBlockwise(float,  256, 2, 0, NF4)
 MAKE_kQuantizeBlockwise(float,  128, 2, 0, NF4)
-MAKE_kQuantizeBlockwise(float,   64, 2, 0, NF4)
+//MAKE_kQuantizeBlockwise(float,   64, 2, 0, NF4)
 
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 4096, 4, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 4096, 4, 1, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 2048, 4, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 1024, 4, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  512, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  256, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  128, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,   64, 2, 0, General8bit)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 4096, 4, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 2048, 4, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 1024, 4, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  512, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  256, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  128, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,   64, 2, 0, FP4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 4096, 4, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 2048, 4, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16, 1024, 4, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  512, 2, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  256, 2, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,  128, 2, 0, NF4)
-MAKE_kQuantizeBlockwise(__nv_bfloat16,   64, 2, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 4096, 4, 0, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 4096, 4, 1, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 2048, 4, 0, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 1024, 4, 0, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  512, 2, 0, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  256, 2, 0, General8bit)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  128, 2, 0, General8bit)
+//MAKE_kQuantizeBlockwise(hip_bfloat16,   64, 2, 0, General8bit)
+
+MAKE_kQuantizeBlockwise(hip_bfloat16, 4096, 4, 0, FP4)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 2048, 4, 0, FP4)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 1024, 4, 0, FP4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  512, 2, 0, FP4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  256, 2, 0, FP4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  128, 2, 0, FP4)
+//MAKE_kQuantizeBlockwise(hip_bfloat16,   64, 2, 0, FP4)
+
+MAKE_kQuantizeBlockwise(hip_bfloat16, 4096, 4, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 2048, 4, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16, 1024, 4, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  512, 2, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  256, 2, 0, NF4)
+MAKE_kQuantizeBlockwise(hip_bfloat16,  128, 2, 0, NF4)
+//MAKE_kQuantizeBlockwise(hip_bfloat16,   64, 2, 0, NF4)
 
 template __global__ void kDequantizeBlockwise<half, 512, 64, 8, FP4>(float *code, unsigned char * A, float * absmax, half *out, const int blocksize, const int n);
 template __global__ void kDequantizeBlockwise<half, 512, 64, 8, General8bit>(float *code, unsigned char * A, float * absmax, half *out, const int blocksize, const int n);
@@ -4040,9 +4069,9 @@ template __global__ void kDequantizeBlockwise<half, 512, 64, 8, NF4>(float *code
 template __global__ void kDequantizeBlockwise<float, 512, 64, 8, FP4>(float *code, unsigned char * A, float * absmax, float *out, const int blocksize, const int n);
 template __global__ void kDequantizeBlockwise<float, 512, 64, 8, General8bit>(float *code, unsigned char * A, float * absmax, float *out, const int blocksize, const int n);
 template __global__ void kDequantizeBlockwise<float, 512, 64, 8, NF4>(float *code, unsigned char * A, float * absmax, float *out, const int blocksize, const int n);
-template __global__ void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, FP4>(float *code, unsigned char * A, float * absmax, __nv_bfloat16 *out, const int blocksize, const int n);
-template __global__ void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, General8bit>(float *code, unsigned char * A, float * absmax, __nv_bfloat16 *out, const int blocksize, const int n);
-template __global__ void kDequantizeBlockwise<__nv_bfloat16, 512, 64, 8, NF4>(float *code, unsigned char * A, float * absmax, __nv_bfloat16 *out, const int blocksize, const int n);
+template __global__ void kDequantizeBlockwise<hip_bfloat16, 512, 64, 8, FP4>(float *code, unsigned char * A, float * absmax, hip_bfloat16 *out, const int blocksize, const int n);
+template __global__ void kDequantizeBlockwise<hip_bfloat16, 512, 64, 8, General8bit>(float *code, unsigned char * A, float * absmax, hip_bfloat16 *out, const int blocksize, const int n);
+template __global__ void kDequantizeBlockwise<hip_bfloat16, 512, 64, 8, NF4>(float *code, unsigned char * A, float * absmax, hip_bfloat16 *out, const int blocksize, const int n);
 
 #define MAKE_OptimizerStatic8bit2StateBlockwise(oname, gtype, block_size, num_per_thread) \
 template __global__ void kOptimizerStatic8bit2StateBlockwise<gtype, oname, block_size, num_per_thread>(gtype* p, gtype* __restrict__ const g, unsigned char* state1, unsigned char* state2, \
@@ -4055,7 +4084,7 @@ template __global__ void kOptimizerStatic8bit2StateBlockwise<gtype, oname, block
 
 MAKE_OptimizerStatic8bit2StateBlockwise(ADAM, float, 2048, 8)
 MAKE_OptimizerStatic8bit2StateBlockwise(ADAM, half, 2048, 8)
-MAKE_OptimizerStatic8bit2StateBlockwise(ADAM, __nv_bfloat16, 2048, 8)
+MAKE_OptimizerStatic8bit2StateBlockwise(ADAM, hip_bfloat16, 2048, 8)
 
 
 #define MAKE_OptimizerStatic8bit1StateBlockwise(oname, gtype, block_size, num_per_thread) \
@@ -4074,6 +4103,6 @@ MAKE_OptimizerStatic8bit1StateBlockwise(RMSPROP, float, 2048, 8)
 MAKE_OptimizerStatic8bit1StateBlockwise(RMSPROP, half, 2048, 8)
 MAKE_OptimizerStatic8bit1StateBlockwise(LION, float, 2048, 8)
 MAKE_OptimizerStatic8bit1StateBlockwise(LION, half, 2048, 8)
-MAKE_OptimizerStatic8bit1StateBlockwise(LION, __nv_bfloat16, 2048, 8)
+MAKE_OptimizerStatic8bit1StateBlockwise(LION, hip_bfloat16, 2048, 8)
 MAKE_OptimizerStatic8bit1StateBlockwise(ADAGRAD, float, 2048, 8)
 MAKE_OptimizerStatic8bit1StateBlockwise(ADAGRAD, half, 2048, 8)

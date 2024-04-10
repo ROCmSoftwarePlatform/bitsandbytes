@@ -1,6 +1,6 @@
 #include <BinSearch.h>
-#include <pthread.h>
 #include <common.h>
+#include <thread>
 
 using namespace BinSearch;
 
@@ -32,7 +32,7 @@ void quantize_cpu(float *code, float *A, float *absmax, unsigned char *out, long
     {
       long long valid_chunks = num_blocks - offset >= thread_wave_size ? thread_wave_size : num_blocks - offset;
       pthread_t *threads = (pthread_t *) malloc(sizeof(pthread_t) * valid_chunks);
-
+      
       struct quantize_block_args **args = (quantize_block_args **) malloc(valid_chunks * sizeof(quantize_block_args *));
 
       for(long long i = 0; i < valid_chunks; i++)

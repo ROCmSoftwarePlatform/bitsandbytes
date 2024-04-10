@@ -1,21 +1,14 @@
-import pytest
-import torch
+from itertools import product
 import math
 
-from itertools import product
-
+import pytest
+import torch
 import transformers
 from transformers import (
-  AutoConfig,
   AutoModelForCausalLM,
-  AutoTokenizer,
   BitsAndBytesConfig,
-  GenerationConfig,
-  set_seed,
-
 )
 
-import bitsandbytes as bnb
 from bitsandbytes.cextension import HIP_ENVIRONMENT
 
 
@@ -132,6 +125,5 @@ def test_pi(requires_cuda, model_and_tokenizer, inference_kernel, DQ):
         for out in outputs:
             print(out)
         raise ValueError(f'Failure count: {failure_count}/{n_cases}')
-
 
 
