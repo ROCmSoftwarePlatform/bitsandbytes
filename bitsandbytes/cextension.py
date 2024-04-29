@@ -1,6 +1,8 @@
 import ctypes as ct
 import os
 import torch
+import subprocess
+import re
 
 from pathlib import Path
 from warnings import warn
@@ -30,11 +32,18 @@ try:
     lib.get_context.restype = ct.c_void_p
     
     HIP_ENVIRONMENT = False
+    ROCM_GPU_ARCH = "unknown"
     if torch.version.cuda:
         lib.get_cusparse.restype = ct.c_void_p
     elif torch.version.hip:
         HIP_ENVIRONMENT = True
         lib.get_hipsparse.restype = ct.c_void_p
+        result = subprocess.run(['rocminfo'], capture_output=True, text=True)
+        match = re.search(r'Name:\s+gfx(\d+)', result.stdout)
+        if match:
+            ROCM_GPU_ARCH = "gfx" + match.group(1)
+        else:
+            ROCM_GPU_ARCH = "unknown"
 
     lib.cget_managed_ptr.restype = ct.c_void_p
     COMPILED_WITH_CUDA = True

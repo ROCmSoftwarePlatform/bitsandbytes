@@ -10,7 +10,7 @@ import numpy as np
 
 import bitsandbytes as bnb
 from bitsandbytes import functional as F
-from bitsandbytes.cextension import HIP_ENVIRONMENT
+from bitsandbytes.cextension import HIP_ENVIRONMENT, ROCM_GPU_ARCH
 from scipy.stats import norm
 
 torch.set_printoptions(
@@ -2543,6 +2543,7 @@ def test_managed():
 @pytest.mark.parametrize("storage_type", ['nf4', 'fp4'], ids=['nf4', 'fp4'])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32], ids=['fp16', 'bf16', 'fp32'])
 @pytest.mark.parametrize("double_quant", [False], ids=['DQ_True'])
+@pytest.mark.skipif(HIP_ENVIRONMENT and ROCM_GPU_ARCH == "gfx90a", reason="this test is not supported on ROCm with gfx90a architecture yet")
 def test_gemv_eye_4bit(storage_type, dtype, double_quant):
     dims = 10
     torch.random.manual_seed(np.random.randint(0, 412424242))
