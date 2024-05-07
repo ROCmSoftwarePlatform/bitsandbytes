@@ -14,7 +14,7 @@ git clone --recurse https://github.com/ROCm/bitsandbytes
 cd bitsandbytes
 git checkout rocm_enabled
 pip install -r requirements-dev.txt
-cmake -DCOMPUTE_BACKEND=hip -S . (Use -DBNB_ROCM_ARCH="gfx90a;gfx942" to target specific gpu arch)
+cmake -DCOMPUTE_BACKEND=hip -S . #Use -DBNB_ROCM_ARCH="gfx90a;gfx942" to target specific gpu arch
 make
 pip install .
 ```
