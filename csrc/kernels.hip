@@ -2299,16 +2299,16 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
        rowStat[j] = row_idx >= numRows ? 0.0f : rowStats[row_idx];
   }
   __syncthreads();
-  
+
   // load data
   int valid_items = block_offset + THREADS * ITEMS_PER_THREAD < n_out ? THREADS * ITEMS_PER_THREAD : n_out - block_offset;
   LoadInt32(loadint32).Load(&(A[block_offset]), local_values, valid_items, 0);
-  
+
   // dequantize data
   #pragma unroll ITEMS_PER_THREAD
   for(int j = 0; j < ITEMS_PER_THREAD; j++)
     local_output[j] = __float2half((local_values[j]*MM_DEQUANT_CONST*rowStat[j]*colStat[j]) + local_biasValue[j]);
-  
+
   // store data
   #pragma unroll ITEMS_PER_THREAD
   for(int j = 0; j < ITEMS_PER_THREAD; j++)
