@@ -39,7 +39,7 @@ try:
         HIP_ENVIRONMENT = True
         lib.get_hipsparse.restype = ct.c_void_p
         result = subprocess.run(['rocminfo'], capture_output=True, text=True)
-        match = re.search(r'Name:\s+gfx(\d+)', result.stdout)
+        match = re.search(r'Name:\s+gfx([a-zA-Z\d]+)', result.stdout)
         if match:
             ROCM_GPU_ARCH = "gfx" + match.group(1)
         else:
