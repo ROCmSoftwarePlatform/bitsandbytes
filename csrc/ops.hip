@@ -649,16 +649,8 @@ int fill_up_to_nearest_multiple(int value, int multiple)
 void dequant_mm_int32_fp16(int *A, float *rowStats, float *colStats, half *out, float* newRowStats, float* newcolStats, half *bias, int numRows, int numCols)
 {
   int threads = 512;
-  //int tileCols = fill_up_to_nearest_multiple(numCols, 32);
-  //int n = numRows*tileCols;
   int tileCols = numCols;
   int n = numRows*numCols;
-  //int subtile_rows = 128;
-  //int tilesize = 32*subtile_rows;
-  //int num_blocks = numRows/subtile_rows;
-  //num_blocks += (numRows % subtile_rows == 0) ? 0 : 1;
-  //num_blocks = num_blocks*(tileCols/32);
-  //assert(threads <= tilesize);
   int num_blocks = numRows * numCols / (threads * 4);
   num_blocks += (numRows * numCols) % (threads * 4) == 0 ? 0 : 1;
 

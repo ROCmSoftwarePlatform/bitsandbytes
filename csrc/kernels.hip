@@ -2273,73 +2273,22 @@ template __global__ void kgetColRowStats<half, 64, 4, 16, 64*4, 1>(half * __rest
 template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kdequant_mm_int32_fp16(int *__restrict__ const A, float *__restrict__ const rowStats, float *__restrict__ const colStats, half *out, float* newRowStats, float* newcolStats, half *__restrict__ const bias, const int numRows, const int numCols, const int tileCols, const int n)
 {
 
-  // Strategy: To dequantize we need to load col/row statistics. This can be very expensive
-  // since different row/col stats need to be loaded with each thread.
-  // (1, bad algorithm) Loading 32 items per thread would only occur 1 row load, but this increases register pressure
-  // and would lead to low global load utilization.
-  // (2, bad algorithm) If each thread loads some columns and multiple rows one needs to do lot of row loads
-  // for each thread and this is duplicated by a factor of 32/num-cols-per-thread.
-  // (3, good algorithm) Combining (1) and (2) we use sub-tiles of size 32xk in shared memory per threadblock.
-  // This allows for efficient row/col loading from shared memory within the tile.
-  // We can run for example 32x128 sub-tiles and warp-strided loads of 4 elements so that each thread has
-  // the same col statistic but needs to load 4 row stats from shared memory. To prevent bank conflicts
-  // we use a block-striped shared memory config [1, 31, 63, 95] so no bank conflicts happen during the
-  // shared memory loads.
-
-  // data is in 32 column-tile major with tile width 32 columns and numRows rows
-  // L1. Load sub-tile row/col statistics. Each thread only holds 1 col, load rows into shared memory.
-  // L2. Load data in warp-striped arrangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
-  // C1. Compute val(row_stat*col_stat)/(127*127) (load 1/(127*127 into register))
-  // C2. Compute normalization values and store col values in register
-  // S1. Store C1 into 16-bit output
-  // S2. Store col/row statistics of new buffer in shared memory
-
-  // We allow for sub-tiles to span multiple col32 tiles. This is okay
-  // since the items per thread only rely on a single column statistic.
-
-
   const int n_out = numRows*numCols;
-
-  //int num_row_tiles = (numRows/SUBTILE_ROWS) + (numRows % SUBTILE_ROWS == 0 ? 0 : 1);
-  // we have tiles of size numRows*32, thus col only increases every numRows
-  // num_row_tiles is the tiles after which the column increases by 32
-  // blockIdx.x is the index of the current tile
-  //int col = ((threadIdx.x % 32) + ((blockIdx.x/num_row_tiles)*32));
-  // base_row increases by SUBTILE_ROWS every block. It wraps back to zero once num_row_tiles is reached
-  //int base_row = (blockIdx.x*SUBTILE_ROWS) % (num_row_tiles*SUBTILE_ROWS);
 
   int block_offset = blockIdx.x * THREADS * ITEMS_PER_THREAD;
   int thread_offset = threadIdx.x * ITEMS_PER_THREAD;
 
-  // SUBTILE_ROWS is independent from ITEMS_PER_THREAD is independent from THREADS
-  // subtiles have 32*SUBTILE_ROWS elements <= THREADS*ITEMS_PER_THREAD
-  // Total subtiles should be n/(32*SUBTILE_ROWS) where each subtile has SUBTILE_ROW*32/4 threads.
-  // For example for a 1024x1024 matrix with 128 SUBTILE_ROWS and 4 ITEMS_PER_THREAD we have
-  // 1024*1024/(128*32) = 256 tiles
-  // 256 tiles are 256*128*32/4 = 256*1024 threads
-
-  // 1. Figure out how index relates to the start of the sub-tile
-  // 2. Each thread < SUBTILE_ROWS calculates row index
-  // 3. Load striped and store in shared memory
-
   int local_values[ITEMS_PER_THREAD];
   half local_output[ITEMS_PER_THREAD];
-  //float local_rowStats[ITEMS_PER_THREAD];
-  //__shared__ float smem_rowStats[SUBTILE_ROWS];
 
   typedef hipcub::BlockLoad<int, THREADS, ITEMS_PER_THREAD, hipcub::BLOCK_LOAD_DIRECT> LoadInt32;
-  //typedef hipcub::BlockExchange<int, THREADS, ITEMS_PER_THREAD> ExchangeInt32;
   __shared__ typename LoadInt32::TempStorage loadint32;
-  //__shared__ typename ExchangeInt32::TempStorage exchangeint32;
 
-
-  // L1. Load sub-tile row/col statistics. Each thread only holds 1 col, load rows into shared memory.
-  //float colStat = col >= numCols ? 0.0f : colStats[col];
-  //float local_biasValue = ((bias == NULL) || (col >= numCols)) ? 0.0f : __half2float(bias[col]);
   int row_idx, col_idx;
   float colStat[ITEMS_PER_THREAD];
   float local_biasValue[ITEMS_PER_THREAD];
   float rowStat[ITEMS_PER_THREAD];
+  // load rowStats and colStats
   #pragma unroll ITEMS_PER_THREAD
   for(int j = 0; j < ITEMS_PER_THREAD; j++)
   {
@@ -2349,26 +2298,18 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
        local_biasValue[j] = ((bias == NULL) || (col_idx >= numCols)) ? 0.0f : __half2float(bias[col_idx]);
        rowStat[j] = row_idx >= numRows ? 0.0f : rowStats[row_idx];
   }
-  // no block loads for rows for now -- keep it simple
-  /*for(int j = threadIdx.x; j < SUBTILE_ROWS; j+=blockDim.x)
-  {
-    // todo: is this global mem access slow due to overlaps or does the L1 cache work well here?
-    int row = (base_row+j) % numRows; // wrap around
-    // each warp accesses the same element, for four consequitive elements
-    // todo: update description about striped shared memory, it is not needed
-    // rowidx: [0, 1, 2, 3...] and each warp reads ITEMS_PER_THREAD consequitive elements
-    smem_rowStats[j] = rowStats[row];
-  }*/
   __syncthreads();
 
+  // load data
   int valid_items = block_offset + THREADS * ITEMS_PER_THREAD < n_out ? THREADS * ITEMS_PER_THREAD : n_out - block_offset;
   LoadInt32(loadint32).Load(&(A[block_offset]), local_values, valid_items, 0);
 
+  // dequantize data
   #pragma unroll ITEMS_PER_THREAD
   for(int j = 0; j < ITEMS_PER_THREAD; j++)
     local_output[j] = __float2half((local_values[j]*MM_DEQUANT_CONST*rowStat[j]*colStat[j]) + local_biasValue[j]);
 
-  // each block processes SUBTILE_ROWS*32 elements
+  // store data
   #pragma unroll ITEMS_PER_THREAD
   for(int j = 0; j < ITEMS_PER_THREAD; j++)
   {
@@ -2376,48 +2317,6 @@ template <int ITEMS_PER_THREAD, int SUBTILE_ROWS, int THREADS>__global__ void kd
     if(outIdx< n_out)
       out[outIdx] = local_output[j];
   }
-  /*const int items_per_load = THREADS*ITEMS_PER_THREAD;
-  const int rows_per_load = items_per_load/32;
-
-  int subtile_base_row = (threadIdx.x / 32)*ITEMS_PER_THREAD; // row within the tile
-  int row_offset = 0;
-  // subtile_idx starts at the base_row*32 + the total offset for a full numRow*32 tile is passed
-  int subtile_start = (blockIdx.x/num_row_tiles)*(numRows*32) + (base_row*32);
-  for(int subtile_idx = subtile_start; subtile_idx < subtile_start + (SUBTILE_ROWS*32); subtile_idx+=items_per_load)
-  {
-    int valid_rows = numRows - (base_row+row_offset) > rows_per_load ? rows_per_load : numRows - (base_row+row_offset);
-    int valid_items = valid_rows*32;
-    if(valid_items <= 0) // the sub-tile might have more elements than the tile itself
-      break;
-
-    // L2. Load data in warp-striped arrangement (t0 holds colidx [0, 0, 0, 0], rowidx [0, 1, 2, 3])
-    LoadInt32(loadint32).Load(&(A[subtile_idx]), local_values, valid_items, 0);
-    ExchangeInt32(exchangeint32).BlockedToWarpStriped(local_values, local_values);
-
-    #pragma unroll ITEMS_PER_THREAD
-    for(int j = 0; j < ITEMS_PER_THREAD; j++)
-      local_rowStats[j] = smem_rowStats[subtile_base_row+row_offset+j];
-
-    #pragma unroll ITEMS_PER_THREAD
-    for(int j = 0; j < ITEMS_PER_THREAD; j++)
-      local_output[j] = __float2half((local_values[j]*MM_DEQUANT_CONST*local_rowStats[j]*colStat) + local_biasValue);
-      //absmax_col = fmax(fabsf(local_output[j]), absmax_col);
-
-    // we store data in row major
-    // to store data efficiently, we want to use block exchange: [0, 32, 64, 92] -> [0, 1, 2, 3]
-    // so that each thread holds ITEMS_PER_THREAD consecutive items for each row
-    // this way throughput into storage is increased by a factor of ~2x
-    // for now we use a simple store
-    #pragma unroll ITEMS_PER_THREAD
-    for(int j = 0; j < ITEMS_PER_THREAD; j++)
-    {
-      int outIdx = col + ((base_row+subtile_base_row+row_offset+j)*numCols);
-      if(outIdx< n_out && col < numCols)
-        out[outIdx] = local_output[j];
-    }
-
-    row_offset += rows_per_load;
-  }*/
 }
 
 
