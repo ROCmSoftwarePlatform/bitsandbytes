@@ -8,7 +8,7 @@ The library includes quantization primitives for 8-bit & 4-bit operations, throu
 
 **Installation for ROCm:**
 
-To install develop version:
+For latest develop version:
 ```bash
 git clone --recurse https://github.com/ROCm/bitsandbytes
 cd bitsandbytes
@@ -17,28 +17,6 @@ pip install -r requirements-dev.txt
 cmake -DCOMPUTE_BACKEND=hip -S . #Use -DBNB_ROCM_ARCH="gfx90a;gfx942" to target specific gpu arch
 make
 pip install .
-```
-
-For ROCm specific versions:
-
-Install Dependencies:
-```bash
-# hipblaslt installation needed only for rocm<6.0
-apt install hipblaslt
-pip install --upgrade pip
-pip install einops lion_pytorch accelerate
-pip install git+https://github.com/ROCm/transformers.git
-```
-Install Bitsandbytes:
-```bash
-git clone --recurse https://github.com/ROCm/bitsandbytes
-cd bitsandbytes
-# Checkout branch as needed
-# for rocm 5.7 - rocm5.7_internal_testing
-# for rocm 6.x - rocm6.2_internal_testing
-git checkout <branch>
-make hip
-python setup.py install
 ```
 
 **For more details, please head to the official documentation page:**
