@@ -30,7 +30,9 @@ git checkout 4b3b34405e7e25cff404f69bfd0a832644430477
 ./install.sh -idc
  
 cd ..
-pip install einops lion_pytorch
+pip install --upgrade pip
+pip install einops lion_pytorch accelerate
+pip install git+https://github.com/ROCm/transformers.git
 
 
 # Install BitsandBytes
