@@ -1,7 +1,7 @@
 # bitsandbytes-rocm
 
 The bitsandbytes is a lightweight wrapper around CUDA custom functions, in particular 8-bit optimizers, matrix multiplication (LLM.int8()), and quantization functions.
-This fork is the ROCm adaptation of bitsandbytes 0.39.1. The repo is inspired by [agrocylo/bitsandbytes-rocm](https://github.com/agrocylo/bitsandbytes-rocm/tree/main/bitsandbytes), which is a ROCm version of bitsandbytes 0.37. While this fork incorporating the majority of features from bitsandbytes 0.39.1, including the crucial 4 bit quantization feature, certain features such as hipblaslt and hip_bfloat16 have been disabled. Enabling these features is listed as a task for the future.
+This fork is the ROCm adaptation of bitsandbytes 0.42.0. The repo is inspired by [agrocylo/bitsandbytes-rocm](https://github.com/agrocylo/bitsandbytes-rocm/tree/main/bitsandbytes), which is a ROCm version of bitsandbytes 0.37. While this fork incorporating the majority of features from bitsandbytes 0.42.0, including the crucial 4 bit quantization feature, certain features which are dependent on hipblaslt have been disabled.
 
 
 
@@ -12,7 +12,7 @@ Resources:
 
 ## TL;DR
 **Requirements**
-Python >=3.8. Linux distribution (Ubuntu, MacOS, etc.) + ROCm >= 5.4.2 or CUDA > 10.0
+Python >=3.8. Linux distribution (Ubuntu, MacOS, etc.) + ROCm >= 5.7
 
 
 **Installation**:
@@ -22,25 +22,23 @@ You need to compile from source for ROCm.
 
 Compilation quickstart:
 ```bash
-# Run Docker
-docker run -it --network=host --device=/dev/kfd --device=/dev/dri --name=bnb_test --shm-size=8g --cap-add=SYS_PTRACE --security-opt seccomp=unconfined --group-add video rocm/pytorch:rocm5.7_ubuntu22.04_py3.10_pytorch_2.0.1
-
-
 # Install Dependencies
 cd <workspace>
-git clone --recurse https://github.com/ROCmSoftwarePlatform/hipBLASLt
+git clone --recurse https://github.com/ROCm/hipBLASLt
 cd hipBLASLt
 git checkout 4b3b34405e7e25cff404f69bfd0a832644430477
 ./install.sh -idc
  
 cd ..
-pip install einops lion_pytorch
+pip install --upgrade pip
+pip install einops lion_pytorch accelerate
+pip install git+https://github.com/ROCm/transformers.git
 
 
 # Install BitsandBytes
-git clone --recurse https://github.com/ROCmSoftwarePlatform/bitsandbytes
+git clone --recurse https://github.com/ROCm/bitsandbytes
 cd bitsandbytes
-git checkout rocm_enabled
+git checkout rocm5.7_internal_testing
 make hip
 python setup.py install
 
