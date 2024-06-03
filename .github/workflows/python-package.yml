@@ -103,6 +103,28 @@ jobs:
           name: shared_library_cuda_${{ matrix.os }}_${{ matrix.arch }}_${{ matrix.cuda_version }}
           path: output/*
           retention-days: 7
+  build-shared-libs-rocm:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        arch: [x86_64]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker multiarch
+        if: startsWith(matrix.os, 'ubuntu')
+        uses: docker/setup-qemu-action@v2
+      - name: Build C++
+        run: bash .github/scripts/build-test-rocm.sh
+        env:
+          build_os: ${{ matrix.os }}
+          build_arch: ${{ matrix.arch }}
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared_library_rocm_${{ matrix.os }}_${{ matrix.arch }}
+          path: output/*
+          retention-days: 7
   build-wheels:
     needs:
       - build-shared-libs
