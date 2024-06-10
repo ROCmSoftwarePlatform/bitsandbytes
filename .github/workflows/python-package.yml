@@ -110,6 +110,8 @@ jobs:
         arch: [x86_64]
     runs-on: [self-hosted, amd]
     steps:
+      - name: Run cleanup
+        run: sudo rm -rf /home/runner/actions-runner/_work/bitsandbytes/ && echo 'Cleanup complete'
       - uses: actions/checkout@v4
       - name: Set up Docker multiarch
         if: startsWith(matrix.os, 'ubuntu')
