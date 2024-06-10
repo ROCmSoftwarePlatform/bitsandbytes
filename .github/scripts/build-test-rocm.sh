@@ -10,10 +10,9 @@ if [ "${build_os:0:6}" == ubuntu ]; then
 		"apt-get update \
       && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake \
       && cmake -DCOMPUTE_BACKEND=hip . \
-      && cmake --build ."
+      && cmake --build . \
+      && pytest --log-cli-level=DEBUG --continue-on-collection-errors tests"
 fi
-
-pytest --log-cli-level=DEBUG --continue-on-collection-errors tests
 
 output_dir="output/${build_os}/${build_arch}"
 mkdir -p "${output_dir}"
