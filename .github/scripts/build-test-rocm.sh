@@ -6,9 +6,9 @@ set -xeuo pipefail
 if [ "${build_os:0:6}" == ubuntu ]; then
 	image=rocm/pytorch:latest
 	echo "Using image $image"
-	docker run --platform "linux/$build_arch" -i -w /src -v "$PWD:/src" --user $(id -u):$(id -g) "$image" sh -c \
-		"apt-get update \
-      && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake \
+	docker run --platform "linux/$build_arch" --rm -i -w /src -v "$PWD:/src" --user $(id -u):$(id -g) "$image" sh -c \
+		"sudo apt-get update \
+      && DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends cmake \
       && cmake -DCOMPUTE_BACKEND=hip . \
       && cmake --build . \
       && pytest --log-cli-level=DEBUG --continue-on-collection-errors tests"
