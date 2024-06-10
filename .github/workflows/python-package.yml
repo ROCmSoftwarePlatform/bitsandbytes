@@ -108,7 +108,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         arch: [x86_64]
-    runs-on: [self-hosted, GPUD53F]
+    runs-on: [self-hosted, amd]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker multiarch
