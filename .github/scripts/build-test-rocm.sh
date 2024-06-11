@@ -10,6 +10,7 @@ if [ "${build_os:0:6}" == ubuntu ]; then
         --device=/dev/kfd --device=/dev/dri --group-add video "$image" sh -c \
 		"apt-get update \
       && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake \
+      && pip install -r requirements-ci.txt \
       && cmake -DCOMPUTE_BACKEND=hip . \
       && cmake --build . \
       && pytest --log-cli-level=DEBUG --continue-on-collection-errors tests"
