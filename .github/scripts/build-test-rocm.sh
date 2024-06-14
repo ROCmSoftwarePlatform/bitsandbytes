@@ -10,7 +10,7 @@ cleanup() {
     docker stop --time=0 bnb_rocm_test
     docker rm bnb_rocm_test
 }
- 
+
 # Function to build and test bitsandbytes
 build_and_test() {
     trap 'cleanup' ERR
