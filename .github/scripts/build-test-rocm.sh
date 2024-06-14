@@ -17,6 +17,7 @@ build_and_test() {
     docker exec bnb_rocm_test sh -c \
         "apt-get update \
 && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake \
+&& cd bitsandbytes \
 && pip install -r requirements-ci.txt \
 && cmake -DCOMPUTE_BACKEND=hip . \
 && cmake --build . \
