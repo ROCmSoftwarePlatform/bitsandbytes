@@ -4,17 +4,16 @@ declare build_os
 
 set -xeuo pipefail
 
-trap 'cleanup' ERR
-
 # Function to cleanup Docker container
 cleanup() {
     echo "Cleaning up the container..."
-    docker stop --time=0 bnb_rocm_test >/dev/null 2>&1 || true
-    docker rm bnb_rocm_test >/dev/null 2>&1 || true
+    docker stop --time=0 bnb_rocm_test
+    docker rm bnb_rocm_test
 }
  
 # Function to build and test bitsandbytes
 build_and_test() {
+    trap 'cleanup' ERR
     echo "Building bitsandbytes..."
     docker exec bnb_rocm_test sh -c \
         "apt-get update \
@@ -31,6 +30,7 @@ build_and_test() {
 setup_container() {
     image=rocm/pytorch:latest
     echo "Using image $image"
+    trap 'cleanup' ERR
     docker run --platform "linux/$build_arch" -i -d -w /src --device=/dev/kfd --device=/dev/dri --group-add video --name bnb_rocm_test "$image"
     docker cp $PWD bnb_rocm_test:/src
 }
