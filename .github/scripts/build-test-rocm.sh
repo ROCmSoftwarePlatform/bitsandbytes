@@ -30,8 +30,8 @@ build_and_test() {
 setup_container() {
     image=rocm/pytorch:latest
     echo "Using image $image"
-    trap 'cleanup' ERR
     docker run --platform "linux/$build_arch" -i -d -w /src --device=/dev/kfd --device=/dev/dri --group-add video --name bnb_rocm_test "$image"
+    trap 'cleanup' ERR
     docker cp $PWD bnb_rocm_test:/src
 }
 
