@@ -4,11 +4,13 @@ declare build_os
 
 set -xeuo pipefail
 
+trap 'cleanup' ERR
+
 # Function to cleanup Docker container
 cleanup() {
     echo "Cleaning up the container..."
-    docker stop --time=0 bnb_rocm_test 
-    docker rm bnb_rocm_test 
+    docker stop --time=0 bnb_rocm_test >/dev/null 2>&1 || true
+    docker rm bnb_rocm_test >/dev/null 2>&1 || true
 }
  
 # Function to build and test bitsandbytes
