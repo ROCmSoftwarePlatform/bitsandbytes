@@ -114,12 +114,6 @@ jobs:
       - name: Set up Docker multiarch
         if: startsWith(matrix.os, 'ubuntu')
         uses: docker/setup-qemu-action@v2
-      - name: Clean up disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf "/usr/local/share/boost"
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
       - name: Build C++
         run: bash .github/scripts/build-test-rocm.sh
         env:
