@@ -108,7 +108,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         arch: [x86_64]
-    runs-on: ${{ matrix.os }} # One day, we could run them on native agents. Azure supports this now but it's planned only for Q3 2023 for hosted agents
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Docker multiarch
