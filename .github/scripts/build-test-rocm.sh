@@ -7,7 +7,7 @@ if [ "${build_os:0:6}" == ubuntu ]; then
 	image=rocm/pytorch:latest
 	echo "Using image $image"
 	docker run --rm --platform "linux/$build_arch" -i -w /src -v "$PWD:/src" --device=/dev/kfd \
-		--device=/dev/dri --group-add video -"$image" sh -c \
+		--device=/dev/dri --group-add video "$image" sh -c \
 		"apt-get update \
       && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends cmake \
       && pip install -r requirements-ci.txt \
