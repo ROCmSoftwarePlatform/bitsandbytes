@@ -6,6 +6,8 @@ The `bitsandbytes` library is a lightweight Python wrapper around CUDA custom fu
 
 The library includes quantization primitives for 8-bit & 4-bit operations, through `bitsandbytes.nn.Linear8bitLt` and `bitsandbytes.nn.Linear4bit` and 8-bit optimizers through `bitsandbytes.optim` module.
 
+This fork is actively developed for ROCm and updates are being pushed into `multi-backend-refactor` branch of upstream bitsandbytes. Users can use either of these to run bitsandbytes on AMD GPUs.
+
 **Installation for ROCm:**
 
 For latest develop version:
