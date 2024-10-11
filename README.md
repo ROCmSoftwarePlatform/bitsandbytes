@@ -8,9 +8,10 @@ The library includes quantization primitives for 8-bit & 4-bit operations, throu
 
 This fork is actively developed for ROCm and updates are being pushed into `multi-backend-refactor` branch of upstream bitsandbytes. Users can use either of these to run bitsandbytes on AMD GPUs.
 
+**Note: For latest develop version please use `rocm_enabled_multi_backend` branch instead of this branch. It is periodically synced with `multi-backend-refactor` branch of upstream, and will be default develop branch until `multi-backend-refactor` branch is merged into upstream `main`.**
+
 **Installation for ROCm:**
 
-For latest develop version:
 ```bash
 git clone --recurse https://github.com/ROCm/bitsandbytes
 cd bitsandbytes
