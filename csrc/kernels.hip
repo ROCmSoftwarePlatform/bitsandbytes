@@ -2853,6 +2853,7 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int T
 #define DENORM 1.0f/127.0f
 #define MAX_SPARSE_COUNT 32
 #define SMEM_SIZE 8*256
+#define WARP_SIZE __AMDGCN_WAVEFRONT_SIZE
 template <typename T, int SPMM_ITEMS, int BITS>
 __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, T *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB)
 {
@@ -2873,9 +2874,9 @@ __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *o
   const int offset = local_max_idx == 0 ? 0 : offset_rowidx[local_max_idx-1];
   const int local_row_idx = rowidx[offset];
 
-  const int warp_id = threadIdx.x / 32;
-  const int warp_idx = threadIdx.x % 32;
-  const int warp_offset = (warp_id*32)*SPMM_ITEMS;
+  const int warp_id = threadIdx.x / WARP_SIZE;
+  const int warp_idx = threadIdx.x % WARP_SIZE;
+  const int warp_offset = (warp_id*WARP_SIZE)*SPMM_ITEMS;
   const int num_items = BITS == 8 ? 8 : 8;
   int idx_col_B = warp_offset;
   int local_idx_col_B_offset = 0;
@@ -2895,7 +2896,7 @@ __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *o
   }
 
   // each thread processes SPMM_ITEMS=32 per iteration. We have 256 threads. 32*256=x192
-  // we expect each warp to be SPMM_ITEMS*32 apart
+  // we expect each warp to be SPMM_ITEMS*WARP_SIZE apart
   // we have a total of 128 bytes for the bank with a bank size of 4 bytes
   // added 3 bytes = 6 values between warps should reduce bank conflicts
   __shared__ half smem_dequant_stats[SMEM_SIZE];
