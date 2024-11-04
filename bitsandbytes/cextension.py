@@ -24,29 +24,28 @@ from pathlib import Path
 import torch
 
 from bitsandbytes.consts import DYNAMIC_LIBRARY_SUFFIX, PACKAGE_DIR
-from bitsandbytes.cuda_specs import CUDASpecs, get_cuda_specs, get_rocm_gpu_arch
+from bitsandbytes.gpu_specs import GPUSpecs, get_gpu_specs, get_rocm_gpu_arch
 
 logger = logging.getLogger(__name__)
 
 
-def get_cuda_bnb_library_path(cuda_specs: CUDASpecs) -> Path:
+def get_gpu_bnb_library_path(gpu_specs: GPUSpecs) -> Path:
     """
-    Get the disk path to the CUDA BNB native library specified by the
-    given CUDA specs, taking into account the `BNB_CUDA_VERSION` override environment variable.
+    Get the disk path to the GPU BNB native library specified by the
+    given GPU specs, taking into account the `BNB_GPU_VERSION` override environment variable.
 
     The library is not guaranteed to exist at the returned path.
     """
-    if torch.version.hip:
-        if BNB_HIP_VERSION < 601:
-            return PACKAGE_DIR / f"libbitsandbytes_rocm{BNB_HIP_VERSION_SHORT}_nohipblaslt{DYNAMIC_LIBRARY_SUFFIX}"
-        else:
-            return PACKAGE_DIR / f"libbitsandbytes_rocm{BNB_HIP_VERSION_SHORT}{DYNAMIC_LIBRARY_SUFFIX}"
-    library_name = f"libbitsandbytes_cuda{cuda_specs.cuda_version_string}"
-    if not cuda_specs.has_cublaslt:
+    library_name = f"libbitsandbytes_{gpu_specs.gpu_backend}{gpu_specs.backend_version_string}"
+    if not gpu_specs.has_blaslt:
         # if not has_cublaslt (CC < 7.5), then we have to choose _nocublaslt
-        library_name += "_nocublaslt"
+        if gpu_specs.gpu_backend == "rocm":
+            library_name += "_nohipblaslt"
+        else:
+            library_name += "_nocublaslt"
     library_name = f"{library_name}{DYNAMIC_LIBRARY_SUFFIX}"
 
+    # Do I need to change it to BNB_GPU_VERSION here? IGNORE FOR NOW!
     override_value = os.environ.get("BNB_CUDA_VERSION")
     if override_value:
         library_name_stem, _, library_name_ext = library_name.rpartition(".")
@@ -69,7 +68,7 @@ def get_cuda_bnb_library_path(cuda_specs: CUDASpecs) -> Path:
 
 class BNBNativeLibrary:
     _lib: ct.CDLL
-    compiled_with_cuda = False
+    compiled_with_gpu = False
 
     def __init__(self, lib: ct.CDLL):
         self._lib = lib
@@ -78,8 +77,8 @@ class BNBNativeLibrary:
         return getattr(self._lib, item)
 
 
-class CudaBNBNativeLibrary(BNBNativeLibrary):
-    compiled_with_cuda = True
+class GpuBNBNativeLibrary(BNBNativeLibrary):
+    compiled_with_gpu = True
 
     def __init__(self, lib: ct.CDLL):
         super().__init__(lib)
@@ -93,18 +92,18 @@ class CudaBNBNativeLibrary(BNBNativeLibrary):
 
 def get_native_library() -> BNBNativeLibrary:
     binary_path = PACKAGE_DIR / f"libbitsandbytes_cpu{DYNAMIC_LIBRARY_SUFFIX}"
-    cuda_specs = get_cuda_specs()
-    if cuda_specs:
-        cuda_binary_path = get_cuda_bnb_library_path(cuda_specs)
-        if cuda_binary_path.exists():
-            binary_path = cuda_binary_path
+    gpu_specs = get_gpu_specs()
+    if gpu_specs:
+        gpu_binary_path = get_gpu_bnb_library_path(gpu_specs)
+        if gpu_binary_path.exists():
+            binary_path = gpu_binary_path
         else:
-            logger.warning("Could not find the bitsandbytes %s binary at %r", BNB_BACKEND, cuda_binary_path)
+            logger.warning("Could not find the bitsandbytes %s binary at %r", gpu_specs.gpu_backend, gpu_binary_path)
     logger.debug(f"Loading bitsandbytes native library from: {binary_path}")
     dll = ct.cdll.LoadLibrary(str(binary_path))
 
     if hasattr(dll, "get_context"):  # only a CUDA-built library exposes this
-        return CudaBNBNativeLibrary(dll)
+        return GpuBNBNativeLibrary(dll)
 
     return BNBNativeLibrary(dll)
 
@@ -113,15 +112,11 @@ ROCM_GPU_ARCH = get_rocm_gpu_arch()
 
 try:
     if torch.version.hip:
-        hip_major, hip_minor = map(int, torch.version.hip.split(".")[0:2])
-        HIP_ENVIRONMENT, BNB_HIP_VERSION = True, hip_major * 100 + hip_minor
-        BNB_HIP_VERSION_SHORT = f"{hip_major}{hip_minor}"
         BNB_BACKEND = "ROCm"
+        HIP_ENVIRONMENT = True
     else:
-        HIP_ENVIRONMENT, BNB_HIP_VERSION = False, 0
-        BNB_HIP_VERSION_SHORT = ""
         BNB_BACKEND = "CUDA"
-
+        HIP_ENVIRONMENT = False
     lib = get_native_library()
 except Exception as e:
     lib = None
