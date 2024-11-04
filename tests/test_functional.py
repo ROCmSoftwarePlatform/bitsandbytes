@@ -11,8 +11,8 @@ import torch
 
 import bitsandbytes as bnb
 from bitsandbytes import functional as F
-from bitsandbytes.gpu_specs import get_compute_capabilities
 from bitsandbytes.cextension import HIP_ENVIRONMENT, ROCM_GPU_ARCH
+from bitsandbytes.gpu_specs import get_compute_capabilities
 from tests.helpers import (
     BOOLEAN_TUPLES,
     TRUE_FALSE,

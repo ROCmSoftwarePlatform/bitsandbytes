@@ -2,7 +2,7 @@ import dataclasses
 import logging
 import re
 import subprocess
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import torch
 
@@ -34,7 +34,9 @@ def get_compute_capabilities() -> Union[int, Tuple[int, int]]:
         hip_major, hip_minor = get_backend_version_tuple()
         return hip_major * 100 + hip_minor
     else:
-        return sorted(torch.cuda.get_device_capability(torch.cuda.device(i)) for i in range(torch.cuda.device_count()))[-1]
+        return sorted(
+            torch.cuda.get_device_capability(torch.cuda.device(i)) for i in range(torch.cuda.device_count())
+        )[-1]
 
 
 def get_backend_version_tuple() -> Tuple[int, int]:
