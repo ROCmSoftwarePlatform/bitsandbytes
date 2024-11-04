@@ -7,8 +7,8 @@ from warnings import warn
 
 import torch
 
-from bitsandbytes.gpu_specs import get_compute_capabilities
 import bitsandbytes.functional as F
+from bitsandbytes.gpu_specs import get_compute_capabilities
 
 
 # math.prod not compatible with python < 3.8
