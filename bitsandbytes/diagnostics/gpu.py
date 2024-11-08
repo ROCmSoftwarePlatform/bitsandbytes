@@ -7,8 +7,8 @@ import torch
 
 from bitsandbytes.cextension import HIP_ENVIRONMENT, get_gpu_bnb_library_path
 from bitsandbytes.consts import NONPYTORCH_DOC_URL
-from bitsandbytes.gpu_specs import GPUSpecs
 from bitsandbytes.diagnostics.utils import print_dedented
+from bitsandbytes.gpu_specs import GPUSpecs
 
 GPU_RT_PATH_PREFERRED_ENVVARS = ("CONDA_PREFIX", "LD_LIBRARY_PATH")
 

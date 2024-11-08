@@ -5,12 +5,12 @@ import torch
 
 from bitsandbytes.cextension import BNB_BACKEND, HIP_ENVIRONMENT
 from bitsandbytes.consts import PACKAGE_GITHUB_URL
-from bitsandbytes.gpu_specs import get_gpu_specs
-from bitsandbytes.diagnostics.cuda import (
+from bitsandbytes.diagnostics.gpu import (
     print_diagnostics,
     print_runtime_diagnostics,
 )
 from bitsandbytes.diagnostics.utils import print_dedented, print_header
+from bitsandbytes.gpu_specs import GPUSpecs
 
 
 def sanity_check():
