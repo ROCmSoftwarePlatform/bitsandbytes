@@ -10,7 +10,7 @@ from bitsandbytes.diagnostics.gpu import (
     print_runtime_diagnostics,
 )
 from bitsandbytes.diagnostics.utils import print_dedented, print_header
-from bitsandbytes.gpu_specs import GPUSpecs
+from bitsandbytes.gpu_specs import get_gpu_specs
 
 
 def sanity_check():
