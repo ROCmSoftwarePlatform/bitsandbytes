@@ -1,12 +1,12 @@
 import pytest
 
 from bitsandbytes.cextension import HIP_ENVIRONMENT, get_gpu_bnb_library_path
-from bitsandbytes.cuda_specs import CUDASpecs
+from bitsandbytes.gpu_specs import GPUSpecs
 
 
 @pytest.fixture
-def cuda120_spec() -> CUDASpecs:
-    return CUDASpecs(
+def cuda120_spec() -> GPUSpecs:
+    return GPUSpecs(
         cuda_version_string="120",
         highest_compute_capability=(8, 6),
         cuda_version_tuple=(12, 0),
@@ -14,8 +14,8 @@ def cuda120_spec() -> CUDASpecs:
 
 
 @pytest.fixture
-def cuda111_noblas_spec() -> CUDASpecs:
-    return CUDASpecs(
+def cuda111_noblas_spec() -> GPUSpecs:
+    return GPUSpecs(
         cuda_version_string="111",
         highest_compute_capability=(7, 2),
         cuda_version_tuple=(11, 1),

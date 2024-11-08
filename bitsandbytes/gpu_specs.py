@@ -15,7 +15,7 @@ class GPUSpecs:
     backend_version_tuple: Tuple[int, int]
 
     @property
-    def has_blaslt(self) -> bool:
+    def enable_blaslt(self) -> bool:
         if torch.version.hip:
             return self.highest_compute_capability >= 601
         else:

@@ -5,7 +5,7 @@ import torch
 
 from bitsandbytes.cextension import BNB_BACKEND, HIP_ENVIRONMENT
 from bitsandbytes.consts import PACKAGE_GITHUB_URL
-from bitsandbytes.cuda_specs import get_cuda_specs
+from bitsandbytes.gpu_specs import get_gpu_specs
 from bitsandbytes.diagnostics.cuda import (
     print_diagnostics,
     print_runtime_diagnostics,
@@ -50,20 +50,20 @@ def main():
     print_header("")
 
     print_header("OTHER")
-    cuda_specs = get_cuda_specs()
+    gpu_specs = get_gpu_specs()
     if HIP_ENVIRONMENT:
-        rocm_specs = f" rocm_version_string='{cuda_specs.cuda_version_string}',"
-        rocm_specs += f" rocm_version_tuple={cuda_specs.cuda_version_tuple}"
+        rocm_specs = f" rocm_version_string='{gpu_specs.cuda_version_string}',"
+        rocm_specs += f" rocm_version_tuple={gpu_specs.cuda_version_tuple}"
         print(f"{BNB_BACKEND} specs:{rocm_specs}")
     else:
-        print(f"{BNB_BACKEND} specs:{cuda_specs}")
+        print(f"{BNB_BACKEND} specs:{gpu_specs}")
     if not torch.cuda.is_available():
         print(f"Torch says {BNB_BACKEND} is not available. Possible reasons:")
         print(f"1. {BNB_BACKEND} driver not installed")
         print(f"2. {BNB_BACKEND} not installed")
         print(f"3. You have multiple conflicting {BNB_BACKEND} libraries")
-    if cuda_specs:
-        print_diagnostics(cuda_specs)
+    if gpu_specs:
+        print_diagnostics(gpu_specs)
     print_runtime_diagnostics()
     print_header("")
     print_header("DEBUG INFO END")

@@ -37,7 +37,7 @@ def get_gpu_bnb_library_path(gpu_specs: GPUSpecs) -> Path:
     The library is not guaranteed to exist at the returned path.
     """
     library_name = f"libbitsandbytes_{gpu_specs.gpu_backend}{gpu_specs.backend_version_string}"
-    if not gpu_specs.has_blaslt:
+    if not gpu_specs.enable_blaslt:
         # if not has_cublaslt (CC < 7.5), then we have to choose _nocublaslt
         if gpu_specs.gpu_backend == "rocm":
             library_name += "_nohipblaslt"

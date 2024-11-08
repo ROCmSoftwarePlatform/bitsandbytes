@@ -10,9 +10,9 @@ from bitsandbytes.consts import NONPYTORCH_DOC_URL
 from bitsandbytes.gpu_specs import GPUSpecs
 from bitsandbytes.diagnostics.utils import print_dedented
 
-CUDART_PATH_PREFERRED_ENVVARS = ("CONDA_PREFIX", "LD_LIBRARY_PATH")
+GPU_RT_PATH_PREFERRED_ENVVARS = ("CONDA_PREFIX", "LD_LIBRARY_PATH")
 
-CUDART_PATH_IGNORED_ENVVARS = {
+GPU_RT_PATH_IGNORED_ENVVARS = {
     "DBUS_SESSION_BUS_ADDRESS",  # hardware related
     "GOOGLE_VM_CONFIG_LOCK_FILE",  # GCP: requires elevated permissions, causing problems in VMs and Jupyter notebooks
     "HOME",  # Linux shell default
@@ -46,7 +46,7 @@ def get_runtime_lib_patterns() -> tuple:
         )
 
 
-def find_cuda_libraries_in_path_list(paths_list_candidate: str) -> Iterable[Path]:
+def find_gpu_libraries_in_path_list(paths_list_candidate: str) -> Iterable[Path]:
     for dir_string in paths_list_candidate.split(os.pathsep):
         if not dir_string:
             continue
@@ -70,10 +70,10 @@ def find_cuda_libraries_in_path_list(paths_list_candidate: str) -> Iterable[Path
 
 def is_relevant_candidate_env_var(env_var: str, value: str) -> bool:
     return (
-        env_var in CUDART_PATH_PREFERRED_ENVVARS  # is a preferred location
+        env_var in GPU_RT_PATH_PREFERRED_ENVVARS  # is a preferred location
         or (
             os.sep in value  # might contain a path
-            and env_var not in CUDART_PATH_IGNORED_ENVVARS  # not ignored
+            and env_var not in GPU_RT_PATH_IGNORED_ENVVARS  # not ignored
             and "CONDA" not in env_var  # not another conda envvar
             and "BASH_FUNC" not in env_var  # not a bash function defined via envvar
             and "\n" not in value  # likely e.g. a script or something?
@@ -85,7 +85,7 @@ def get_potentially_lib_path_containing_env_vars() -> Dict[str, str]:
     return {env_var: value for env_var, value in os.environ.items() if is_relevant_candidate_env_var(env_var, value)}
 
 
-def find_cudart_libraries() -> Iterator[Path]:
+def find_gpu_rt_libraries() -> Iterator[Path]:
     """
     Searches for a cuda installations, in the following order of priority:
         1. active conda env
@@ -99,19 +99,19 @@ def find_cudart_libraries() -> Iterator[Path]:
     """
     candidate_env_vars = get_potentially_lib_path_containing_env_vars()
 
-    for envvar in CUDART_PATH_PREFERRED_ENVVARS:
+    for envvar in GPU_RT_PATH_PREFERRED_ENVVARS:
         if envvar in candidate_env_vars:
             directory = candidate_env_vars[envvar]
-            yield from find_cuda_libraries_in_path_list(directory)
+            yield from find_gpu_libraries_in_path_list(directory)
             candidate_env_vars.pop(envvar)
 
     for env_var, value in candidate_env_vars.items():
-        yield from find_cuda_libraries_in_path_list(value)
+        yield from find_gpu_libraries_in_path_list(value)
 
 
 def _print_cuda_diagnostics(gpu_specs: GPUSpecs) -> None:
     print(
-        f"PyTorch settings found: CUDA_VERSION={gpu_specs.cuda_version_string}, "
+        f"PyTorch settings found: CUDA_VERSION={gpu_specs.backend_version_string}, "
         f"Highest Compute Capability: {gpu_specs.highest_compute_capability}.",
     )
 
@@ -128,7 +128,7 @@ def _print_cuda_diagnostics(gpu_specs: GPUSpecs) -> None:
         """,
         )
 
-    cuda_major, cuda_minor = gpu_specs.cuda_version_tuple
+    cuda_major, cuda_minor = gpu_specs.backend_version_tuple
     if cuda_major < 11:
         print_dedented(
             """
@@ -140,7 +140,7 @@ def _print_cuda_diagnostics(gpu_specs: GPUSpecs) -> None:
     print(f"To manually override the PyTorch CUDA version please see: {NONPYTORCH_DOC_URL}")
 
     # 7.5 is the minimum CC for cublaslt
-    if not gpu_specs.has_cublaslt:
+    if not gpu_specs.enable_blaslt:
         print_dedented(
             """
             WARNING: Compute capability < 7.5 detected! Only slow 8-bit matmul is supported for your GPU!
@@ -155,7 +155,7 @@ def _print_cuda_diagnostics(gpu_specs: GPUSpecs) -> None:
 
 
 def _print_hip_diagnostics(gpu_specs: GPUSpecs) -> None:
-    print(f"PyTorch settings found: ROCM_VERSION={gpu_specs.cuda_version_string}")
+    print(f"PyTorch settings found: ROCM_VERSION={gpu_specs.backend_version_string}")
 
     binary_path = get_gpu_bnb_library_path(gpu_specs)
     if not binary_path.exists():
@@ -168,7 +168,7 @@ def _print_hip_diagnostics(gpu_specs: GPUSpecs) -> None:
         """,
         )
 
-    hip_major, hip_minor = gpu_specs.cuda_version_tuple
+    hip_major, hip_minor = gpu_specs.backend_version_tuple
     if (hip_major, hip_minor) < (6, 1):
         print_dedented(
             """
@@ -185,10 +185,10 @@ def print_diagnostics(gpu_specs: GPUSpecs) -> None:
 
 
 def _print_cuda_runtime_diagnostics() -> None:
-    cudart_paths = list(find_cudart_libraries())
-    if not cudart_paths:
+    gpu_rt_paths = list(find_gpu_rt_libraries())
+    if not gpu_rt_paths:
         print("WARNING! CUDA runtime files not found in any environmental path.")
-    elif len(cudart_paths) > 1:
+    elif len(gpu_rt_paths) > 1:
         print_dedented(
             f"""
             Found duplicate CUDA runtime files (see below).
@@ -207,15 +207,15 @@ def _print_cuda_runtime_diagnostics() -> None:
             export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda-11.2,
             """,
         )
-        for pth in cudart_paths:
+        for pth in gpu_rt_paths:
             print(f"* Found CUDA runtime at: {pth}")
 
 
 def _print_hip_runtime_diagnostics() -> None:
-    cudart_paths = list(find_cudart_libraries())
-    if not cudart_paths:
+    gpu_rt_paths = list(find_gpu_rt_libraries())
+    if not gpu_rt_paths:
         print("WARNING! ROCm runtime files not found in any environmental path.")
-    elif len(cudart_paths) > 1:
+    elif len(gpu_rt_paths) > 1:
         print_dedented(
             f"""
             Found duplicate ROCm runtime files (see below).
@@ -230,7 +230,7 @@ def _print_hip_runtime_diagnostics() -> None:
             """,
         )
 
-        for pth in cudart_paths:
+        for pth in gpu_rt_paths:
             print(f"* Found ROCm runtime at: {pth}")
 
 
