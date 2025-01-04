@@ -2853,6 +2853,7 @@ template <int THREADS, int ITEMS_PER_THREAD, int TILE_ROWS, int TILE_COLS, int T
 #define DENORM 1.0f/127.0f
 #define MAX_SPARSE_COUNT 32
 #define SMEM_SIZE 8*256
+#define WARP_SIZE warpSize
 template <typename T, int SPMM_ITEMS, int BITS>
 __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *offset_rowidx, int *rowidx, int *colidx, half *values, T *B, half *out, float * __restrict__ const dequant_stats, int nnz, int rowsA, int rowsB, int colsB)
 {
@@ -2873,9 +2874,9 @@ __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *o
   const int offset = local_max_idx == 0 ? 0 : offset_rowidx[local_max_idx-1];
   const int local_row_idx = rowidx[offset];
 
-  const int warp_id = threadIdx.x / 32;
-  const int warp_idx = threadIdx.x % 32;
-  const int warp_offset = (warp_id*32)*SPMM_ITEMS;
+  const int warp_id = threadIdx.x / WARP_SIZE;
+  const int warp_idx = threadIdx.x % WARP_SIZE;
+  const int warp_offset = (warp_id*WARP_SIZE)*SPMM_ITEMS;
   const int num_items = BITS == 8 ? 8 : 8;
   int idx_col_B = warp_offset;
   int local_idx_col_B_offset = 0;
@@ -2895,7 +2896,7 @@ __global__ void kspmm_coo_very_sparse_naive(int *max_count, int *max_idx, int *o
   }
 
   // each thread processes SPMM_ITEMS=32 per iteration. We have 256 threads. 32*256=x192
-  // we expect each warp to be SPMM_ITEMS*32 apart
+  // we expect each warp to be SPMM_ITEMS*WARP_SIZE apart
   // we have a total of 128 bytes for the bank with a bank size of 4 bytes
   // added 3 bytes = 6 values between warps should reduce bank conflicts
   __shared__ half smem_dequant_stats[SMEM_SIZE];
@@ -3543,7 +3544,6 @@ template <typename T, int THREADS> __global__ void kgemm_4bit_inference(int M, i
 #endif
 }
 
-#define warp_size __AMDGCN_WAVEFRONT_SIZE
 // No of 4bit values processed by each thread
 #define num_values_4bit 32
 template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inference_naive(int M, int N, int K, T * __restrict__ const A, unsigned char *B,  float *absmax, const float *datatype, T * out,  int lda, int ldb, int ldc, int blocksize)
@@ -3553,12 +3553,12 @@ template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inferenc
   // load step-by-step in chunks of [warp_size,warps]: 1xwarp_size * [warp_size,warps] -> [1,warps]
   // 4 warps -> 4 loads per iter
   // 1xwarp_size * warp_sizex4 -> 1x4 outputs per thread block
-  typedef hipcub::WarpReduce<float, warp_size> WarpReduce;
-  __shared__ typename WarpReduce::TempStorage temp_storage[THREADS/warp_size];
+  typedef hipcub::WarpReduce<float, warpSize> WarpReduce;
+  __shared__ typename WarpReduce::TempStorage temp_storage[THREADS/warpSize];
 
-  const int warp_idx = threadIdx.x / warp_size;
-  const int warp_lane = threadIdx.x % warp_size;
-  const int row_B = (THREADS/warp_size)*blockIdx.x + warp_idx;
+  const int warp_idx = threadIdx.x / warpSize;
+  const int warp_lane = threadIdx.x % warpSize;
+  const int row_B = (THREADS/warpSize)*blockIdx.x + warp_idx;
   const int num_values_8bit = num_values_4bit/2;
   float local_C = 0.0f;
 
@@ -3574,7 +3574,7 @@ template <typename T, int THREADS, int BITS> __global__ void kgemm_4bit_inferenc
 
   // A: [1, K]
   // B: [M, K]
-  for(int inner_idx = warp_lane*num_values_4bit; inner_idx < K; inner_idx += warp_size*num_values_4bit)
+  for(int inner_idx = warp_lane*num_values_4bit; inner_idx < K; inner_idx += warpSize*num_values_4bit)
   {
     int inner_idx_halved = inner_idx/2;
     int offset_B = ldb*row_B;
