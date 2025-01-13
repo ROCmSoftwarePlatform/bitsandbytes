@@ -10,14 +10,14 @@ import torch
 @dataclasses.dataclass(frozen=True)
 class GPUSpecs:
     gpu_backend: str
-    highest_compute_capability: Union[int, Tuple[int, int]]
+    highest_compute_capability: Tuple[int, int]
     backend_version_string: str
     backend_version_tuple: Tuple[int, int]
 
     @property
     def enable_blaslt(self) -> bool:
         if torch.version.hip:
-            return self.highest_compute_capability >= 601
+            return self.highest_compute_capability >= (6, 1)
         else:
             return self.highest_compute_capability >= (7, 5)
 
@@ -32,7 +32,7 @@ def get_gpu_backend() -> str:
 def get_compute_capabilities() -> Union[int, Tuple[int, int]]:
     if torch.version.hip:
         hip_major, hip_minor = get_backend_version_tuple()
-        return hip_major * 100 + hip_minor
+        return (hip_major, hip_minor)
     else:
         return sorted(
             torch.cuda.get_device_capability(torch.cuda.device(i)) for i in range(torch.cuda.device_count())

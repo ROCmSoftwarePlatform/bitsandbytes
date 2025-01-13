@@ -513,7 +513,7 @@ def test_vector_quant(dim1, dim2, dim3):
         assert_all_approx_close(A1, A, atol=0.01, rtol=0.1, count=int(n * 0.002))
 
 
-@pytest.mark.skipif(0 < get_compute_capabilities() < 601, reason="this test is supported on ROCm from 6.1")
+@pytest.mark.skipif((0, 0) < get_compute_capabilities() < (6, 1), reason="this test is supported on ROCm from 6.1")
 @pytest.mark.parametrize("dim1", get_test_dims(2, 256, n=2), ids=id_formatter("dim1"))
 @pytest.mark.parametrize("dim2", get_test_dims(2, 256, n=2), ids=id_formatter("dim2"))
 @pytest.mark.parametrize("dim3", get_test_dims(2, 256, n=2), ids=id_formatter("dim3"))
@@ -1818,7 +1818,7 @@ def test_zeropoint():
     print(err1, err2, err3, err4, err5, err6)
 
 
-@pytest.mark.skipif(0 < get_compute_capabilities() < 601, reason="this test is supported on ROCm from 6.1")
+@pytest.mark.skipif((0, 0) < get_compute_capabilities() < (6, 1), reason="this test is supported on ROCm from 6.1")
 @pytest.mark.parametrize("device", ["cuda", "cpu"])
 def test_extract_outliers(device):
     for i in range(k):

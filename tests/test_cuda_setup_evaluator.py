@@ -7,18 +7,18 @@ from bitsandbytes.gpu_specs import GPUSpecs
 @pytest.fixture
 def cuda120_spec() -> GPUSpecs:
     return GPUSpecs(
-        cuda_version_string="120",
+        backend_version_string="120",
         highest_compute_capability=(8, 6),
-        cuda_version_tuple=(12, 0),
+        backend_version_tuple=(12, 0),
     )
 
 
 @pytest.fixture
 def cuda111_noblas_spec() -> GPUSpecs:
     return GPUSpecs(
-        cuda_version_string="111",
+        backend_version_string="111",
         highest_compute_capability=(7, 2),
-        cuda_version_tuple=(11, 1),
+        backend_version_tuple=(11, 1),
     )
 
 

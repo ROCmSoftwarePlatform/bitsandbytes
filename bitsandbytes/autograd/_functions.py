@@ -224,7 +224,7 @@ def supports_igemmlt(device: torch.device) -> bool:
     if device == torch.device("cpu"):
         return True
     if torch.version.hip:
-        return False if get_compute_capabilities() < 601 else True
+        return False if get_compute_capabilities() < (6, 1) else True
     if get_compute_capabilities() < (7, 5):
         return False
     device_name = torch.cuda.get_device_name(device=device)
