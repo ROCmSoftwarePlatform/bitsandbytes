@@ -52,8 +52,8 @@ def main():
     print_header("OTHER")
     gpu_specs = get_gpu_specs()
     if HIP_ENVIRONMENT:
-        rocm_specs = f" rocm_version_string='{gpu_specs.cuda_version_string}',"
-        rocm_specs += f" rocm_version_tuple={gpu_specs.cuda_version_tuple}"
+        rocm_specs = f" rocm_version_string='{gpu_specs.backend_version_string}',"
+        rocm_specs += f" rocm_version_tuple={gpu_specs.backend_version_tuple}"
         print(f"{BNB_BACKEND} specs:{rocm_specs}")
     else:
         print(f"{BNB_BACKEND} specs:{gpu_specs}")
