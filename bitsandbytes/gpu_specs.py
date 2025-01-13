@@ -29,7 +29,7 @@ def get_gpu_backend() -> str:
         return "cuda"
 
 
-def get_compute_capabilities() -> Union[int, Tuple[int, int]]:
+def get_compute_capabilities() -> Tuple[int, int]:
     if torch.version.hip:
         hip_major, hip_minor = get_backend_version_tuple()
         return (hip_major, hip_minor)
