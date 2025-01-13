@@ -4,7 +4,7 @@ import pytest
 import torch
 
 import bitsandbytes as bnb
-from bitsandbytes.cextension import BNB_HIP_VERSION
+from bitsandbytes.gpu_specs import get_compute_capabilities
 from tests.helpers import (
     BOOLEAN_TRIPLES,
     BOOLEAN_TUPLES,
@@ -199,7 +199,7 @@ def test_matmul(dim1, dim2, dim3, dim4, funcs, dtype, req_grad: Tuple[bool, bool
                 assert (idx == 0).sum().item() < n * 0.02
 
 
-@pytest.mark.skipif(0 < BNB_HIP_VERSION < 601, reason="this test is supported on ROCm from 6.1")
+@pytest.mark.skipif((0, 0) < get_compute_capabilities() < (6, 1), reason="this test is supported on ROCm from 6.1")
 @pytest.mark.parametrize("dim1", get_test_dims(16, 64, n=1), ids=id_formatter("dim1"))
 @pytest.mark.parametrize("dim2", [*get_test_dims(32, 96, n=1), 0], ids=id_formatter("dim2"))
 @pytest.mark.parametrize("dim3", get_test_dims(32, 96, n=1), ids=id_formatter("dim3"))

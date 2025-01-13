@@ -2,27 +2,44 @@ import dataclasses
 import logging
 import re
 import subprocess
-from typing import List, Optional, Tuple
+from typing import Optional, Tuple, Union
 
 import torch
 
 
 @dataclasses.dataclass(frozen=True)
-class CUDASpecs:
+class GPUSpecs:
+    gpu_backend: str
     highest_compute_capability: Tuple[int, int]
-    cuda_version_string: str
-    cuda_version_tuple: Tuple[int, int]
+    backend_version_string: str
+    backend_version_tuple: Tuple[int, int]
 
     @property
-    def has_cublaslt(self) -> bool:
-        return self.highest_compute_capability >= (7, 5)
+    def enable_blaslt(self) -> bool:
+        if torch.version.hip:
+            return self.highest_compute_capability >= (6, 1)
+        else:
+            return self.highest_compute_capability >= (7, 5)
 
 
-def get_compute_capabilities() -> List[Tuple[int, int]]:
-    return sorted(torch.cuda.get_device_capability(torch.cuda.device(i)) for i in range(torch.cuda.device_count()))
+def get_gpu_backend() -> str:
+    if torch.version.hip:
+        return "rocm"
+    else:
+        return "cuda"
 
 
-def get_cuda_version_tuple() -> Tuple[int, int]:
+def get_compute_capabilities() -> Tuple[int, int]:
+    if torch.version.hip:
+        hip_major, hip_minor = get_backend_version_tuple()
+        return (hip_major, hip_minor)
+    else:
+        return sorted(
+            torch.cuda.get_device_capability(torch.cuda.device(i)) for i in range(torch.cuda.device_count())
+        )[-1]
+
+
+def get_backend_version_tuple() -> Tuple[int, int]:
     # https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART____VERSION.html#group__CUDART____VERSION
     if torch.version.cuda:
         major, minor = map(int, torch.version.cuda.split("."))
@@ -31,19 +48,20 @@ def get_cuda_version_tuple() -> Tuple[int, int]:
     return major, minor
 
 
-def get_cuda_version_string() -> str:
-    major, minor = get_cuda_version_tuple()
+def get_backend_version_string() -> str:
+    major, minor = get_backend_version_tuple()
     return f"{major}{minor}"
 
 
-def get_cuda_specs() -> Optional[CUDASpecs]:
+def get_gpu_specs() -> Optional[GPUSpecs]:
     if not torch.cuda.is_available():
         return None
 
-    return CUDASpecs(
-        highest_compute_capability=(get_compute_capabilities()[-1]),
-        cuda_version_string=(get_cuda_version_string()),
-        cuda_version_tuple=get_cuda_version_tuple(),
+    return GPUSpecs(
+        gpu_backend=get_gpu_backend(),
+        highest_compute_capability=(get_compute_capabilities()),
+        backend_version_string=(get_backend_version_string()),
+        backend_version_tuple=get_backend_version_tuple(),
     )
 
 

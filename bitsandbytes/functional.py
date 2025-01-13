@@ -25,7 +25,7 @@ def prod(iterable):
 
 name2qmap = {}
 
-if lib and lib.compiled_with_cuda:
+if lib and lib.compiled_with_gpu:
     """C FUNCTIONS FOR OPTIMIZERS"""
     str2optimizer32bit = {
         "adam": (

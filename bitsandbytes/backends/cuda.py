@@ -24,7 +24,7 @@ from bitsandbytes.utils import QuantState
 
 from .base import Backend
 
-if lib and lib.compiled_with_cuda:
+if lib and lib.compiled_with_gpu:
     """C FUNCTIONS FOR OPTIMIZERS"""
     str2optimizer32bit = {
         "adam": (

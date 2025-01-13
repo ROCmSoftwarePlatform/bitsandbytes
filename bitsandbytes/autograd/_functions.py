@@ -7,8 +7,8 @@ from warnings import warn
 
 import torch
 
-from bitsandbytes.cextension import BNB_HIP_VERSION
 import bitsandbytes.functional as F
+from bitsandbytes.gpu_specs import get_compute_capabilities
 
 
 # math.prod not compatible with python < 3.8
@@ -224,8 +224,8 @@ def supports_igemmlt(device: torch.device) -> bool:
     if device == torch.device("cpu"):
         return True
     if torch.version.hip:
-        return False if BNB_HIP_VERSION < 601 else True
-    if torch.cuda.get_device_capability(device=device) < (7, 5):
+        return False if get_compute_capabilities() < (6, 1) else True
+    if get_compute_capabilities() < (7, 5):
         return False
     device_name = torch.cuda.get_device_name(device=device)
     nvidia16_models = ("GTX 1630", "GTX 1650", "GTX 1660")  # https://en.wikipedia.org/wiki/GeForce_16_series
