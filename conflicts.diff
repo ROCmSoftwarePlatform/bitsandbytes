@@ -1,0 +1,93 @@
+diff --cc docs/source/installation.mdx
+index 146fb0d,7961385..0000000
+--- a/docs/source/installation.mdx
++++ b/docs/source/installation.mdx
+@@@ -165,15 -243,80 +243,87 @@@ apt-get update && apt-get install -y gi
+  
+  # Install pytorch compatible with above ROCm version
+  pip install torch --index-url https://download.pytorch.org/whl/rocm6.1/
++ ```
+  
+++<<<<<<< HEAD
+ +# Install bitsandbytes from PyPI
+ +# (This is supported on Ubuntu 22.04, Python 3.10, ROCm 6.1.0/6.1.1/6.1.2/6.2.0 and gpu arch - gfx90a, gfx942, gfx1100
+ +# Please install from source if your configuration doesn't match with these)
+ +pip install bitsandbytes
+++=======
++ </hfoption>
++ <hfoption id="Intel CPU + GPU">
+++>>>>>>> upstream/multi-backend-refactor
++ 
++ Compatible hardware and functioning `import intel_extension_for_pytorch as ipex` capable environment with Python `3.10` as the minimum requirement.
++ 
++ Please refer to [the official Intel installations instructions](https://intel.github.io/intel-extension-for-pytorch/index.html#installation?platform=cpu&version=v2.4.0%2bcpu&os=linux%2fwsl2) for guidance on how to pip install the necessary `intel_extension_for_pytorch` dependency.
++ 
++ </hfoption>
++ <hfoption id="Ascend NPU">
++ 
++ Compatible hardware and functioning `import torch_npu` capable environment with Python `3.10` as the minimum requirement.
++ 
++ Please refer to [the official Ascend installations instructions](https://www.hiascend.com/document/detail/zh/Pytorch/60RC3/configandinstg/instg/insg_0001.html) for guidance on how to pip install the necessary `torch_npu` dependency.
++ 
++ </hfoption>
++ <hfoption id="Apple Silicon (MPS)">
+  
++ > [!TIP]
++ > Apple Silicon support is still a WIP. Please visit and write us in [this Github Discussion space on coordinating the kickoff of MPS backend development](https://github.com/bitsandbytes-foundation/bitsandbytes/discussions/1340) and coordinate a community-led effort to implement this backend.
++ 
++ </hfoption>
++ </hfoptions>
++ 
++ ### Installation
++ 
++ You can install the pre-built wheels for each backend, or compile from source for custom configurations.
++ 
++ #### Pre-built Wheel Installation (recommended)[[multi-backend-pip]]
++ 
++ <hfoptions id="platform">
++ <hfoption id="Linux">
++ 
++ ```
++ # Note, if you don't want to reinstall BNBs dependencies, append the `--no-deps` flag!
++ pip install --force-reinstall 'https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_multi-backend-refactor/bitsandbytes-0.44.1.dev0-py3-none-manylinux_2_24_x86_64.whl'
++ ```
++ 
++ </hfoption>
++ <hfoption id="Windows">
++ 
++ ```
++ # Note, if you don't want to reinstall BNBs dependencies, append the `--no-deps` flag!
++ pip install --force-reinstall 'https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_multi-backend-refactor/bitsandbytes-0.44.1.dev0-py3-none-win_amd64.whl'
++ ```
++ 
++ </hfoption>
++ <hfoption id="Mac">
++ 
++ > [!WARNING]
++ > bitsandbytes does not yet support Apple Silicon / Metal with a dedicated backend. However, the build infrastructure is in place and the below pip install will eventually provide Apple Silicon support as it becomes available on the `multi-backend-refactor` branch based on community contributions.
++ 
++ ```
++ # Note, if you don't want to reinstall BNBs dependencies, append the `--no-deps` flag!
++ pip install --force-reinstall 'https://github.com/bitsandbytes-foundation/bitsandbytes/releases/download/continuous-release_multi-backend-refactor/bitsandbytes-0.44.1.dev0-py3-none-macosx_13_1_arm64.whl'
++ ```
++ 
++ </hfoption>
++ </hfoptions>
++ 
++ #### Compile from Source[[multi-backend-compile]]
++ 
++ <hfoptions id="backend">
++ <hfoption id="AMD ROCm">
++ 
++ #### AMD GPU
++ 
++ bitsandbytes is fully supported from ROCm 6.1 onwards (currently in alpha release).
++ 
++ ```bash
+  # Install bitsandbytes from source
+  # Clone bitsandbytes repo, ROCm backend is currently enabled on multi-backend-refactor branch
+- git clone --depth 1 -b multi-backend-refactor https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
++ git clone -b multi-backend-refactor https://github.com/bitsandbytes-foundation/bitsandbytes.git && cd bitsandbytes/
+  
+  # Install dependencies
+  pip install -r requirements-dev.txt

@@ -20,6 +20,7 @@ from bitsandbytes.utils import (
     LINEAR_8BIT_WEIGHTS_FORMAT_MAPPING,
     OutlierTracer,
     enable_ipex_fusion,
+    reverse_4bit_compress_format,
 )
 
 T = TypeVar("T", bound="torch.nn.Module")
@@ -314,6 +315,15 @@ class Params4bit(torch.nn.Parameter):
     def cpu(self, non_blocking: bool = False):
         return self.to(device="cpu", non_blocking=non_blocking)
 
+    def npu(self, device: Optional[Union[int, device, str]] = None, non_blocking: bool = False):
+        # `torch.Tensor.to(<int num>)` is not supported by `torch_npu` (see this [issue](https://github.com/Ascend/pytorch/issues/16)).
+        if isinstance(device, int):
+            device = f"npu:{device}"
+        return self.to(device="npu" if device is None else device, non_blocking=non_blocking)
+
+    def xpu(self, non_blocking: bool = False):
+        return self.to(device="xpu", non_blocking=non_blocking)
+
     @overload
     def to(
         self: T,
@@ -331,7 +341,7 @@ class Params4bit(torch.nn.Parameter):
     def to(self, *args, **kwargs):
         device, dtype, non_blocking, convert_to_format = torch._C._nn._parse_to(*args, **kwargs)
 
-        if device is not None and device.type in ["cuda", "cpu"] and not self.bnb_quantized:
+        if device is not None and device.type in ["cuda", "cpu", "npu", "xpu"] and not self.bnb_quantized:
             return self._quantize(device)
         else:
             if self.quant_state is not None:
@@ -417,6 +427,7 @@ class Linear4bit(nn.Linear):
         # self.persistent_buffers = []  # TODO consider as way to save quant state
         self.compute_dtype = compute_dtype
         self.compute_type_is_set = False
+        self.ipex_linear_is_set = False
         self.quant_state = None
         self.quant_storage = quant_storage
 
@@ -445,34 +456,39 @@ class Linear4bit(nn.Linear):
         save weight and bias,
         then fill state_dict with components of quant_state
         """
-        if (
-            getattr(self.weight, "quant_state", None) is not None
-            and getattr(self.weight.quant_state, "op_context", None) is not None
-        ):
-            context = self.weight.quant_state.op_context
-            self.weight.data = context.to_public(context.get_weight()).reshape([1, -1])
+        if getattr(self.weight, "quant_state", None) is not None and getattr(self.weight.quant_state, "ipex", False):
+            if self.weight.device.type == "cpu":
+                original_weight = torch.ops.ipex_prepack.woq_linear_unpack_weight(
+                    self.weight, "nf4", self.weight.quant_state.shape, 2
+                )
+                self.weight.data = reverse_4bit_compress_format(original_weight.data)
+            elif self.weight.device.type == "xpu":
+                self.weight.data = reverse_4bit_compress_format(self.weight.data.reshape(1, -1))
+
+            self.weight.quant_state.ipex = False
 
         super()._save_to_state_dict(destination, prefix, keep_vars)  # saving weight and bias
 
         if getattr(self.weight, "quant_state", None) is not None:
-            if (
-                self.weight.quant_state.absmax.shape.numel() == 0
-                and getattr(self.weight.quant_state, "op_context", None) is not None
-            ):
-                self.weight.quant_state.absmax = context.get_scales().reshape(-1)
-                delattr(self.weight.quant_state, "op_context")
             for k, v in self.weight.quant_state.as_dict(packed=True).items():
                 destination[prefix + "weight." + k] = v if keep_vars else v.detach()
 
-    def forward(self, x: torch.Tensor):
-        # Check if ipex fusion can be used
+    def set_ipex_linear(self, x: torch.Tensor):
         if (
-            x.device.type == "cpu"
-            and not hasattr(self.weight.quant_state, "op_context")
+            (x.device.type in ("cpu", "xpu"))
+            and not getattr(self.weight.quant_state, "ipex", False)
             and self.weight.quant_state.shape[1] % self.weight.quant_state.blocksize == 0
             and self.weight.quant_state.quant_type == "nf4"
+            and not self.training
+            and x.requires_grad == False
         ):
-            enable_ipex_fusion(self.weight, self.weight.quant_state)
+            enable_ipex_fusion(self, x)
+
+    def forward(self, x: torch.Tensor):
+        # Check if ipex fusion can be used
+        if not self.ipex_linear_is_set:
+            self.set_ipex_linear(x)
+            self.ipex_linear_is_set = True
 
         # weights are cast automatically as Int8Params, but the bias has to be cast manually
         if self.bias is not None and self.bias.dtype != x.dtype:
@@ -488,7 +504,7 @@ class Linear4bit(nn.Linear):
                 self.weight.quant_state = self.quant_state
             else:
                 print(
-                    "FP4 quantization state not initialized. Please call .cuda() or .to(device) on the LinearFP4 layer first.",
+                    "FP4 quantization state not initialized. Please call .cuda(), .npu() or .to(device) on the LinearFP4 layer first.",
                 )
         if not self.compute_type_is_set:
             self.set_compute_type(x)
@@ -499,7 +515,8 @@ class Linear4bit(nn.Linear):
             x = x.to(self.compute_dtype)
 
         bias = None if self.bias is None else self.bias.to(self.compute_dtype)
-        out = bnb.matmul_4bit(x, self.weight.t(), bias=bias, quant_state=self.weight.quant_state)
+        weight = self.weight.t() if len(self.weight.shape) == 2 else self.weight
+        out = bnb.matmul_4bit(x, weight, bias=bias, quant_state=self.weight.quant_state)
 
         out = out.to(inp_dtype)
 
@@ -632,7 +649,20 @@ class Int8Params(torch.nn.Parameter):
 
     def cpu(self):
         # we store the 8-bit rows-major weight
-        B = self.data.contiguous().bfloat16().cpu()
+        B = self.data.contiguous().to(torch.bfloat16).cpu()
+        CB, CBt, SCB, SCBt, coo_tensorB = bnb.functional.double_quant(B)
+        if CBt is not None:
+            del CBt
+        if SCBt is not None:
+            del SCBt
+        self.data = CB
+        self.CB = CB
+        self.SCB = SCB
+        return self
+
+    def xpu(self, device):
+        # we store the 8-bit rows-major weight
+        B = self.data.contiguous().to(torch.float16).xpu(device)
         CB, CBt, SCB, SCBt, coo_tensorB = bnb.functional.double_quant(B)
         if CBt is not None:
             del CBt
@@ -668,6 +698,13 @@ class Int8Params(torch.nn.Parameter):
                 return self
             else:
                 return self.cpu()
+        elif device.type == "xpu":
+            if self.data.dtype == torch.int8:
+                self.data = self.data.contiguous().xpu(device)
+                self.CB = self.data
+                return self
+            else:
+                return self.xpu(device)
         else:
             new_param = Int8Params(
                 super().to(device=device, dtype=dtype, non_blocking=non_blocking),
