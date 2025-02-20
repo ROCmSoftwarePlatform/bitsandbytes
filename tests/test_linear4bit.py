@@ -7,8 +7,8 @@ import pytest
 import torch
 
 import bitsandbytes as bnb
-from tests.helpers import TRUE_FALSE, torch_load_from_buffer, torch_save_to_buffer
 from bitsandbytes.cextension import HIP_ENVIRONMENT
+from tests.helpers import TRUE_FALSE, torch_load_from_buffer, torch_save_to_buffer
 
 storage = {
     "uint8": torch.uint8,
