@@ -8,6 +8,7 @@ import torch
 
 import bitsandbytes as bnb
 from tests.helpers import TRUE_FALSE, torch_load_from_buffer, torch_save_to_buffer
+from bitsandbytes.cextension import HIP_ENVIRONMENT
 
 storage = {
     "uint8": torch.uint8,
@@ -17,6 +18,7 @@ storage = {
 }
 
 
+@pytest.mark.skipif(HIP_ENVIRONMENT, reason="this test is not supported on ROCm yet")
 @pytest.mark.parametrize("quant_storage", ["uint8", "float16", "bfloat16", "float32"])
 @pytest.mark.parametrize("bias", TRUE_FALSE)
 @pytest.mark.parametrize("compress_statistics", TRUE_FALSE)
